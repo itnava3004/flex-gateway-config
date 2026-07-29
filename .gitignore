@@ -1,0 +1,25 @@
+# ============================================================
+# .gitignore — EAI-3541669 Flex Gateway Config
+# ============================================================
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Secrets (NEVER commit real credentials) ---
+*.env
+.env.*
+secrets.yaml
+**/secrets/
+
+# --- Build / temp ---
+*.tmp
+*.log
+dist/
+build/
