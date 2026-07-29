@@ -1,0 +1,67 @@
+# ============================================================
+# File: api-inventory.yaml
+# Purpose: Single source of truth for all APIs managed under
+#          EAI-3541669 Flex Gateway configuration project
+# ============================================================
+
+project: eai-3541669
+lastUpdated: "2025-01-01"
+maintainer: "integration-platform-team"
+
+apis:
+  - id: customer-api
+    displayName: "Customer API"
+    version: "v1"
+    wave: R1
+    status: active
+    basePath: "/customer/v1"
+    configPath: "apis/customer-api/config.yaml"
+    owner: "customer-domain-team"
+    contacts:
+      tech: "customer-tech@example.com"
+      business: "customer-ops@example.com"
+    sla:
+      tier: gold
+      uptimeSLA: "99.9%"
+      maxLatencyMs: 2000
+
+  - id: payments-api
+    displayName: "Payments API"
+    version: "v1"
+    wave: R1
+    status: active
+    basePath: "/payments/v1"
+    configPath: "apis/payments-api/config.yaml"
+    owner: "payments-domain-team"
+    contacts:
+      tech: "payments-tech@example.com"
+      business: "payments-ops@example.com"
+    sla:
+      tier: platinum
+      uptimeSLA: "99.99%"
+      maxLatencyMs: 1000
+
+  - id: orders-api
+    displayName: "Orders API"
+    version: "v1"
+    wave: R2
+    status: pending
+    basePath: "/orders/v1"
+    configPath: "apis/orders-api/config.yaml"
+    owner: "orders-domain-team"
+    contacts:
+      tech: "orders-tech@example.com"
+      business: "orders-ops@example.com"
+    sla:
+      tier: gold
+      uptimeSLA: "99.9%"
+      maxLatencyMs: 2000
+
+# --- Summary counts (keep in sync manually or via CI) ---
+summary:
+  total: 3
+  active: 2
+  pending: 1
+  waves:
+    R1: 2
+    R2: 1

@@ -1,0 +1,20 @@
+# Policy template: IP Allowlist
+# Restricts access to a set of trusted CIDR blocks.
+# The ips list below is a placeholder — each API specifies its own CIDR ranges.
+# Typically used to limit access to FXF internal network subnets only.
+#
+# Usage in apis/{app}/config.yaml:
+#   policies:
+#     - assetId: ip-allowlist
+#       policyVersion: "1.1.2"
+#       config:
+#         ipExpression: "#[attributes.headers['x-forwarded-for']]"
+#         ips:
+#           - 10.0.0.0/8
+
+assetId: ip-allowlist
+policyVersion: "1.1.2"
+groupId: "68ef9520-24e9-4cf2-b2f5-620025690913"
+defaults:
+  ipExpression: "#[attributes.headers['x-forwarded-for']]"
+  ips: []

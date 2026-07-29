@@ -1,0 +1,39 @@
+app: orders-api
+assetId: orders-api
+version: 1.0.0
+endpoints:
+  - name: orders-cancel
+    uri: https://l7-gw.fxf.internal/orders/cancel
+    publicPath: /orders/v1/cancel
+    authPattern: client-id-enforcement
+  - name: orders-create
+    uri: https://l7-gw.fxf.internal/orders/create
+    publicPath: /orders/v1/create
+    authPattern: client-id-enforcement
+  - name: orders-list
+    uri: https://l7-gw.fxf.internal/orders/list
+    publicPath: /orders/v1/list
+    authPattern: client-id-enforcement
+  - name: orders-track
+    uri: https://l7-gw.fxf.internal/orders/track
+    publicPath: /orders/v1/track
+    authPattern: client-id-enforcement
+policies:
+  - assetId: client-id-enforcement
+    policyVersion: "1.3.3"
+    config:
+      credentialsOriginHasHttpBasicAuthenticationHeader: customExpression
+      clientIdExpression: "#[attributes.headers['client_id']]"
+      clientSecretExpression: "#[attributes.headers['client_secret']]"
+  - assetId: ip-allowlist
+    policyVersion: "1.1.2"
+    config:
+      ipExpression: "#[attributes.headers['x-forwarded-for']]"
+      ips:
+        - 10.30.0.0/16
+  - assetId: rate-limiting
+    policyVersion: "1.5.1"
+    config:
+      rateLimits:
+        - maximumRequests: 100
+          timePeriodInMilliseconds: 1000

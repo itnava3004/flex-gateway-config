@@ -1,0 +1,6 @@
+# Per-environment overlay for PROD.
+env: prod
+defaults:
+  publicHostname: flex.fxf.example.com
+  tlsCertName: fxf-prod-wildcard
+apps: {}

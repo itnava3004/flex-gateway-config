@@ -1,0 +1,6 @@
+# Per-environment overlay for TEST.
+env: test
+defaults:
+  publicHostname: test-flex.fxf.example.com
+  tlsCertName: fxf-test-wildcard
+apps: {}

@@ -1,0 +1,6 @@
+# Per-environment overlay for QA.
+env: qa
+defaults:
+  publicHostname: qa-flex.fxf.example.com
+  tlsCertName: fxf-qa-wildcard
+apps: {}

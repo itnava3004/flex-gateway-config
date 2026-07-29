@@ -1,0 +1,7 @@
+# Wave R1 manifest — first migration wave (Dec 2026 – Jan 2027).
+# APIs: Payments + Orders (highest-volume, highest-priority Prod APIs).
+wave: R1
+description: "Wave 1 — Payments & Orders"
+apps:
+  - payments-api
+  - orders-api

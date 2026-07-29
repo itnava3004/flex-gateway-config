@@ -1,0 +1,5 @@
+# Wave R3 manifest — third migration wave (Feb – Apr 2027).
+# Populated after API inventory & discovery phase (Aug–Sep 2026).
+wave: R3
+description: "Wave 3 — TBD after Discovery"
+apps: []

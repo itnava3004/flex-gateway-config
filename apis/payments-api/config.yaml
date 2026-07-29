@@ -1,0 +1,35 @@
+app: payments-api
+assetId: payments-api
+version: 1.0.0
+endpoints:
+  - name: payments-charge
+    uri: https://l7-gw.fxf.internal/payments/charge
+    publicPath: /payments/v1/charge
+    authPattern: client-id-enforcement
+  - name: payments-refund
+    uri: https://l7-gw.fxf.internal/payments/refund
+    publicPath: /payments/v1/refund
+    authPattern: client-id-enforcement
+  - name: payments-status
+    uri: https://l7-gw.fxf.internal/payments/status
+    publicPath: /payments/v1/status
+    authPattern: client-id-enforcement
+policies:
+  - assetId: client-id-enforcement
+    policyVersion: "1.3.3"
+    config:
+      credentialsOriginHasHttpBasicAuthenticationHeader: customExpression
+      clientIdExpression: "#[attributes.headers['client_id']]"
+      clientSecretExpression: "#[attributes.headers['client_secret']]"
+  - assetId: rate-limiting
+    policyVersion: "1.5.1"
+    config:
+      rateLimits:
+        - maximumRequests: 50
+          timePeriodInMilliseconds: 1000
+  - assetId: ip-allowlist
+    policyVersion: "1.1.2"
+    config:
+      ipExpression: "#[attributes.headers['x-forwarded-for']]"
+      ips:
+        - 10.20.0.0/16
