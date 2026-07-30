@@ -242,10 +242,12 @@ pipeline {
                                     return
                                 }
 
-                                // Idempotent: re-running the pipeline updates instead of duplicating
+                                // Idempotent: reuse existing instance and patch its endpoint
+                                // so proxyUri/upstreamUri stay in sync with the config repo.
                                 def instanceId = findExistingInstance(api.assetId, label)
                                 if (instanceId) {
                                     log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
+                                    updateInstance(instanceId, api)
                                 } else {
                                     instanceId = createInstance(api)
                                     log('INFO', "Created new instance id=${instanceId} for label=${label}")
@@ -303,6 +305,23 @@ def findExistingInstance(String assetId, String label) {
     def json  = readJSON text: response
     def match = json.assets?.collectMany { it.apis ?: [] }?.find { it.instanceLabel == label }
     return match ? "${match.id}" : null
+}
+
+// Patch an existing API instance's endpoint so proxyUri and upstreamUri
+// stay in sync with the config repo on every pipeline run.
+def updateInstance(String instanceId, Map api) {
+    def body = writeJSON(returnText: true, json: [
+        endpoint: [deploymentType: 'HY', uri: api.upstreamUri, proxyUri: api.proxyUri, isCloudHub: null]
+    ])
+    writeFile file: "update-${api.appName}.json", text: body
+    try {
+        apiCall('PATCH',
+            "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}",
+            "update-${api.appName}.json")
+        log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}")
+    } catch (err) {
+        log('WARN', "Could not update instance ${instanceId} endpoint: ${err.message}")
+    }
 }
 
 // Create a new API instance in API Manager. Returns the new instance id.
