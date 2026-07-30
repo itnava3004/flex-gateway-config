@@ -407,7 +407,7 @@ def apiCall(String method, String url, String bodyFile) {
                 \$code = [int]\$_.Exception.Response.StatusCode
                 \$msg  = \$_.ErrorDetails.Message
                 if (-not \$msg) { \$msg = \$_.Exception.Message }
-                throw "API call failed [${method} ${url}] HTTP \$code: \$msg"
+                throw "API call failed [${method} ${url}] HTTP \${code}: \${msg}"
             }
         """,
         returnStdout: true
