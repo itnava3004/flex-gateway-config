@@ -196,14 +196,16 @@ pipeline {
                         passwordVariable: 'CLIENT_SECRET')]) {
                     script {
                         log('INFO', 'Requesting OAuth2 access token via client_credentials grant')
-                        def token = sh(
+                        def token = powershell(
                             script: '''
-                                set -euo pipefail
-                                curl -sS -f -X POST \
-                                  "${ANYPOINT_BASE_URL}/accounts/api/v2/oauth2/token" \
-                                  -H "Content-Type: application/json" \
-                                  -d "{\\"grant_type\\":\\"client_credentials\\",\\"client_id\\":\\"${CLIENT_ID}\\",\\"client_secret\\":\\"${CLIENT_SECRET}\\"}" \
-                                | jq -r '.access_token'
+                                $ErrorActionPreference = "Stop"
+                                $body = '{"grant_type":"client_credentials","client_id":"' + $env:CLIENT_ID + '","client_secret":"' + $env:CLIENT_SECRET + '"}'
+                                $resp = Invoke-WebRequest -Method POST `
+                                    -Uri "$env:ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" `
+                                    -ContentType "application/json" `
+                                    -Body $body `
+                                    -UseBasicParsing
+                                ($resp.Content | ConvertFrom-Json).access_token
                             ''',
                             returnStdout: true
                         ).trim()
@@ -385,30 +387,32 @@ def validateInstance(String instanceId, String label) {
     error "${label} (id=${instanceId}) did not reach an active state within 3 minutes"
 }
 
-// Authenticated Anypoint API call. Captures HTTP status separately so non-2xx
-// surfaces useful context. Token is never logged.
+// Authenticated Anypoint API call using PowerShell Invoke-WebRequest (Windows-native).
+// Token is never logged — masked by withCredentials in the Authenticate stage.
 def apiCall(String method, String url, String bodyFile) {
-    def dataFlag = bodyFile ? "--data @${bodyFile}" : ''
-    def raw = sh(
+    def bodyArg = bodyFile ? "-Body (Get-Content -Raw '${bodyFile}')" : ''
+    def raw = powershell(
         script: """
-            set -euo pipefail
-            curl -sS -X ${method} "${url}" \\
-              -H "Authorization: Bearer \${ANYPOINT_TOKEN}" \\
-              -H "Content-Type: application/json" \\
-              -H "X-Correlation-ID: \${CORRELATION_ID}" \\
-              ${dataFlag} \\
-              -w "\\n__HTTP_STATUS__:%{http_code}"
+            \$ErrorActionPreference = "Stop"
+            \$headers = @{
+                'Authorization'    = "Bearer \$env:ANYPOINT_TOKEN"
+                'X-Correlation-ID' = "\$env:CORRELATION_ID"
+            }
+            try {
+                \$resp = Invoke-WebRequest -Method '${method}' -Uri '${url}' `
+                    -Headers \$headers -ContentType 'application/json' `
+                    ${bodyArg} -UseBasicParsing
+                Write-Output \$resp.Content
+            } catch {
+                \$code = [int]\$_.Exception.Response.StatusCode
+                \$msg  = \$_.ErrorDetails.Message
+                if (-not \$msg) { \$msg = \$_.Exception.Message }
+                throw "API call failed [${method} ${url}] HTTP \$code: \$msg"
+            }
         """,
         returnStdout: true
     ).trim()
-
-    def parts  = raw.split('__HTTP_STATUS__:')
-    def body   = parts[0].trim()
-    def status = parts.length > 1 ? parts[1].trim().toInteger() : 0
-    if (status < 200 || status >= 300) {
-        error "API call failed [${method} ${url}] HTTP ${status}: ${body}"
-    }
-    return body
+    return raw
 }
 
 // JSON-structured, correlation-aware log line.
