@@ -3,4 +3,10 @@ env: qa
 defaults:
   publicHostname: qa-flex.fxf.example.com
   tlsCertName: fxf-qa-wildcard
-apps: {}
+apps:
+  payments-api:
+    proxyUri: http://0.0.0.0:8081
+  orders-api:
+    proxyUri: http://0.0.0.0:8082
+  customer-api:
+    proxyUri: http://0.0.0.0:8083

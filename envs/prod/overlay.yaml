@@ -3,4 +3,10 @@ env: prod
 defaults:
   publicHostname: flex.fxf.example.com
   tlsCertName: fxf-prod-wildcard
-apps: {}
+apps:
+  payments-api:
+    proxyUri: http://0.0.0.0:8081
+  orders-api:
+    proxyUri: http://0.0.0.0:8082
+  customer-api:
+    proxyUri: http://0.0.0.0:8083
