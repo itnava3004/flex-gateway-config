@@ -38,7 +38,7 @@ pipeline {
                defaultValue: '',
                description: 'Git URL of flex-gateway-config repo. Leave blank to use the repo this Jenkinsfile is checked in to.')
         string(name: 'CONFIG_BRANCH',
-               defaultValue: 'main',
+               defaultValue: 'master',
                description: 'Branch of the config repo')
         string(name: 'CONFIG_CRED_ID',
                defaultValue: '',
