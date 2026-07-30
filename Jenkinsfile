@@ -374,7 +374,16 @@ def applyPolicies(String instanceId, List policies, String appName) {
     def existingResp = apiCall('GET',
         "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
         null)
-    def existingIds = readJSON(text: existingResp).collect {
+    def respData = readJSON text: existingResp
+    // Anypoint may return a bare [] or a wrapped {"policies":[...]} object.
+    // Calling .collect{} on a Map iterates Map.Entry objects, breaking it.template access.
+    List policiesList = []
+    if (respData instanceof List) {
+        policiesList = respData as List
+    } else if (respData?.policies instanceof List) {
+        policiesList = respData.policies as List
+    }
+    def existingIds = policiesList.collect {
         it.template?.assetId ?: it.implementationAsset?.assetId ?: ''
     }.findAll { it }
 
