@@ -139,8 +139,20 @@ pipeline {
                             log('INFO', "Wave ${wave}: filtered to [${apps.join(', ')}]")
                         }
 
+                        // Eagerly flatten overlay apps into a plain Groovy Map so that
+                        // hyphenated keys (e.g. customer-api) are safe to look up inside
+                        // closures under Jenkins CPS serialisation.
+                        def overlayApps = [:]
                         def overlayPath = "envs/${params.ENVIRONMENT}/overlay.yaml"
-                        def overlay     = fileExists(overlayPath) ? readYaml(file: overlayPath) : [:]
+                        if (fileExists(overlayPath)) {
+                            def rawOverlay = readYaml file: overlayPath
+                            rawOverlay?.apps?.each { k, v -> overlayApps["${k}"] = v }
+                        }
+                        if (overlayApps) {
+                            log('INFO', "Overlay apps found: ${overlayApps.keySet().join(', ')}")
+                        } else {
+                            log('WARN', "No overlay apps found for ${params.ENVIRONMENT} — proxy ports will default to 8080")
+                        }
 
                         def apiList = []
                         apps.each { appName ->
@@ -149,12 +161,13 @@ pipeline {
                                 error "API config not found: ${cfgPath}"
                             }
                             def apiCfg     = readYaml file: cfgPath
-                            def appOverlay = overlay?.apps?.get(appName) ?: [:]
+                            def appOverlay = overlayApps[appName] ?: [:]
 
                             // upstreamUri: env overlay wins, then first endpoint's backend URI
                             def upstreamUri = "${appOverlay.upstreamUri ?: apiCfg.endpoints[0].uri}"
                             // proxyUri: env overlay wins, then a sane default on port 8080
                             def proxyUri    = "${appOverlay.proxyUri    ?: 'http://0.0.0.0:8080'}"
+                            log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}")
 
                             def policies = (apiCfg.policies ?: []).collect { p ->
                                 [
