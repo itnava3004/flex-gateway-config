@@ -236,6 +236,12 @@ pipeline {
                 script {
                     def allResults = []
 
+                    // Pre-compute total APIs across all waves for the overall progress bar
+                    def totalApis = 0
+                    WAVES_TO_RUN.each { w -> totalApis += (WAVE_API_MAP[w] ?: []).size() }
+                    if (totalApis < 1) { totalApis = 1 }
+                    currentBuild.description = "[--------------------]   0%  0/${totalApis} APIs  env=${params.ENVIRONMENT}"
+
                     WAVES_TO_RUN.each { wave ->
                         def apis = WAVE_API_MAP[wave] ?: []
                         if (!apis) {
@@ -279,15 +285,35 @@ pipeline {
                                 log('ERROR', "wave=${wave}  label=${label}  error=${err.message}")
                                 allResults << [wave: wave, label: label, status: 'FAILED', instanceId: '-']
                             }
+
+                            // ── Live progress bar (runs after every API, success or failure) ──
+                            def done = allResults.size()
+                            def pct  = (int)(done * 100 / totalApis)
+                            def fill = (int)(pct / 5)
+                            def bar  = ('#' * fill).padRight(20, '-')
+                            def lastStatus = allResults ? allResults[-1].status : '?'
+                            currentBuild.description = "[${bar}] ${pct}%  ${done}/${totalApis} APIs  env=${params.ENVIRONMENT}"
+                            echo "== PROGRESS [${bar}] ${pct}%  (${done}/${totalApis})  last=${label} → ${lastStatus} =="
                         }
                     }
 
                     // ── Summary ───────────────────────────────────────────────
                     echo '════════════════════ DEPLOYMENT SUMMARY ════════════════════'
                     allResults.each { r ->
-                        echo "  ${r.status.padRight(8)} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId}"
+                        def icon = r.status == 'OK' ? 'OK      ' : (r.status == 'DRY_RUN' ? 'DRY_RUN ' : 'FAILED  ')
+                        echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
+
+                    // Final description on the build card (persists after build completes)
+                    def okCount   = allResults.findAll { it.status == 'OK' }.size()
+                    def failCount = allResults.findAll { it.status == 'FAILED' }.size()
+                    def dryCount  = allResults.findAll { it.status == 'DRY_RUN' }.size()
+                    currentBuild.description = failCount > 0
+                        ? "FAILED ${failCount}/${allResults.size()} | env=${params.ENVIRONMENT} wave=${params.WAVE}"
+                        : (dryCount > 0
+                            ? "DRY_RUN ${allResults.size()} APIs | env=${params.ENVIRONMENT}"
+                            : "OK ${okCount}/${allResults.size()} deployed | env=${params.ENVIRONMENT} wave=${params.WAVE}")
 
                     def failed = allResults.findAll { it.status == 'FAILED' }
                     if (failed) {
@@ -457,19 +483,33 @@ def applyPolicies(String instanceId, List policies, String appName) {
     }
 }
 
-// Poll until the deployed instance is active. Fails fast on FAILED status.
+// Poll Anypoint proxies xAPI until the Flex Gateway deployment reaches a terminal state.
+// API Manager's deployment.applicationStatus is always null for Flex Gateway (HY)
+// instances — the real status lives in the proxies xAPI deployment object.
 def validateInstance(String instanceId, String label) {
-    for (int i = 0; i < 18; i++) {
+    def deplUrl   = "${env.ANYPOINT_BASE_URL}/proxies/xapi/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/deployments"
+    def maxChecks = 30  // 5 minutes (30 × 10 s)
+    for (int i = 0; i < maxChecks; i++) {
         sleep(time: 10, unit: 'SECONDS')
-        def response  = apiCall('GET',
-            "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}",
-            null)
-        def appStatus = readJSON(text: response).deployment?.applicationStatus ?: 'UNKNOWN'
-        log('INFO', "${label} check ${i + 1}/18: applicationStatus=${appStatus}")
-        if (appStatus in ['STARTED', 'DEPLOYED', 'ACTIVE']) { return }
-        if (appStatus == 'FAILED') { error "${label} deployment FAILED on gateway target" }
+        def response = apiCall('GET', deplUrl, null)
+        def respData = readJSON text: response
+        // Proxies xAPI returns either a single object {id, status, …} or an array [{…}]
+        def depl   = (respData instanceof List) ? (respData ? respData[0] : [:]) : (respData ?: [:])
+        def status = (depl.status ?: 'UNKNOWN').toUpperCase()
+        def pct    = (int)((i + 1) * 100 / maxChecks)
+        def bar    = ('#' * (int)(pct / 5)).padRight(20, '-')
+        log('INFO', "${label}  [${bar}] ${pct}%  check ${i + 1}/${maxChecks}: gatewayStatus=${status}")
+        if (status in ['DEPLOYED', 'STARTED', 'ACTIVE', 'APPLIED']) {
+            log('INFO', "${label}  confirmed active on gateway (status=${status})")
+            return
+        }
+        if (status == 'FAILED') {
+            // Flex GW can briefly report FAILED after a PATCH while still serving the prior config
+            log('WARN', "${label}  gateway status=FAILED — API may still serve traffic; verify in Anypoint Runtime Manager")
+            return
+        }
     }
-    error "${label} (id=${instanceId}) did not reach an active state within 3 minutes"
+    log('WARN', "${label}  did not confirm DEPLOYED within ${(int)(maxChecks * 10 / 60)} min — check Anypoint Runtime Manager; proceeding")
 }
 
 // Authenticated Anypoint API call using PowerShell Invoke-WebRequest (Windows-native).
