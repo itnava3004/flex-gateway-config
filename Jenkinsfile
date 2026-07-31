@@ -251,41 +251,44 @@ pipeline {
                         echo "─────────────────────────── WAVE ${wave} ───────────────────────────"
 
                         apis.each { api ->
-                            def label = api.instanceLabel
-                            stage("${wave}: ${api.appName}")   // appears as a column in Stage View
-                            try {
+                            def label       = api.instanceLabel
+                            def stageStatus = 'FAILED'
+                            def stageId     = '-'
+
+                            // stage() with a block body registers in the Stage View grid.
+                            // catchError lets the loop continue to the next API on failure
+                            // while still marking this column RED in the grid.
+                            stage("${wave}: ${api.appName}") {
                                 if (params.DRY_RUN) {
                                     log('INFO', "[DRY_RUN] wave=${wave}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
                                     log('INFO', "[DRY_RUN]   upstream=${api.upstreamUri}  proxy=${api.proxyUri}")
                                     log('INFO', "[DRY_RUN]   policies=${api.policies?.collect { it.assetId }}")
-                                    allResults << [wave: wave, label: label, status: 'DRY_RUN', instanceId: '-']
-                                    return
-                                }
-
-                                // Idempotent: reuse existing instance and patch its endpoint
-                                // so proxyUri/upstreamUri stay in sync with the config repo.
-                                def instanceId = findExistingInstance(api.assetId, label)
-                                if (instanceId) {
-                                    log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
-                                    updateInstance(instanceId, api)
+                                    stageStatus = 'DRY_RUN'
                                 } else {
-                                    instanceId = createInstance(api)
-                                    log('INFO', "Created new instance id=${instanceId} for label=${label}")
+                                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                                        def instanceId = findExistingInstance(api.assetId, label)
+                                        if (instanceId) {
+                                            log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
+                                            updateInstance(instanceId, api)
+                                        } else {
+                                            instanceId = createInstance(api)
+                                            log('INFO', "Created new instance id=${instanceId} for label=${label}")
+                                        }
+
+                                        deployInstance(instanceId)
+
+                                        if (!params.SKIP_POLICIES && api.policies) {
+                                            applyPolicies(instanceId, api.policies, api.appName)
+                                        }
+
+                                        validateInstance(instanceId, label)
+                                        stageId     = instanceId
+                                        stageStatus = 'OK'
+                                    }
                                 }
-
-                                deployInstance(instanceId)
-
-                                if (!params.SKIP_POLICIES && api.policies) {
-                                    applyPolicies(instanceId, api.policies, api.appName)
-                                }
-
-                                validateInstance(instanceId, label)
-                                allResults << [wave: wave, label: label, status: 'OK', instanceId: instanceId]
-
-                            } catch (err) {
-                                log('ERROR', "wave=${wave}  label=${label}  error=${err.message}")
-                                allResults << [wave: wave, label: label, status: 'FAILED', instanceId: '-']
                             }
+
+                            allResults << [wave: wave, label: label, status: stageStatus, instanceId: stageId]
 
                             // ── Live progress bar (runs after every API, success or failure) ──
                             def done = allResults.size()
