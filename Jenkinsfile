@@ -454,9 +454,11 @@ def applyPolicies(String instanceId, List policies, String appName) {
     } catch (err) {
         log('WARN', "Could not fetch existing policies for ${appName}: ${err.message} — will attempt all policies")
     }
-    // Handle various response shapes: template.assetId, implementationAsset.assetId, or top-level assetId
+    // Anypoint stores Flex Gateway policy variants with a '-flex' suffix (e.g. 'client-id-enforcement-flex')
+    // but config.yaml uses the base name ('client-id-enforcement'). Strip the suffix so matching works.
     def existingIds = policiesList.collect {
-        it.template?.assetId ?: it.implementationAsset?.assetId ?: it.assetId ?: ''
+        def raw = it.template?.assetId ?: it.implementationAsset?.assetId ?: it.assetId ?: ''
+        raw.endsWith('-flex') ? raw.replace('-flex', '') : raw
     }.findAll { it }
 
     policies.each { policy ->
@@ -488,7 +490,7 @@ def applyPolicies(String instanceId, List policies, String appName) {
                     if (\$code -eq 409) { Write-Output 'DUPLICATE' }
                     else {
                         \$m = \$_.ErrorDetails.Message; if (-not \$m) { \$m = \$_.Exception.Message }
-                        Write-Output "ERROR:\$code:\$m"
+                        Write-Output "ERROR:\${code}:\$m"
                     }
                 }
             """,
