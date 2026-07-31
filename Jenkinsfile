@@ -120,9 +120,9 @@ pipeline {
                         : []
 
                     // ── Build wave → api-list map ──────────────────────────────
-                    // Policy asset-id normalisation: some configs use the short
-                    // name; Anypoint Exchange requires the full asset ID.
-                    def POLICY_ID_NORM = ['rate-limiting': 'rate-limiting-sla']
+                    // Policy asset-id normalisation: use config.yaml's assetId directly.
+                    // rate-limiting (simple, uses rateLimits[]) != rate-limiting-sla (SLA-tier).
+                    def POLICY_ID_NORM = [:]
 
                     def waveApiMap = [:]
                     wavesToRun.each { wave ->
@@ -355,6 +355,8 @@ def createInstance(Map api) {
 }
 
 // Trigger deployment of an API instance to the Flex Gateway target.
+// Idempotent: POST on first run; on 400 UniqueConstraintError, GET the existing
+// deployment id and PATCH it instead (keeps target/version in sync on re-runs).
 def deployInstance(String instanceId) {
     def body = writeJSON(returnText: true, json: [
         type          : 'HY',
@@ -363,28 +365,70 @@ def deployInstance(String instanceId) {
         targetName    : env.FLEX_TARGET_NAME,
         environmentId : env.ENV_ID
     ])
-    writeFile file: "deploy-${instanceId}.json", text: body
-    apiCall('POST',
-        "${env.ANYPOINT_BASE_URL}/proxies/xapi/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/deployments",
-        "deploy-${instanceId}.json")
+    def bodyFile = "deploy-${instanceId}.json"
+    writeFile file: bodyFile, text: body
+
+    powershell """
+        \$ErrorActionPreference = "Stop"
+        \$headers = @{
+            'Authorization'    = "Bearer \$env:ANYPOINT_TOKEN"
+            'X-Correlation-ID' = "\$env:CORRELATION_ID"
+        }
+        \$deplUrl = "\$env:ANYPOINT_BASE_URL/proxies/xapi/v1/organizations/\$env:ORG_ID/environments/\$env:ENV_ID/apis/${instanceId}/deployments"
+        \$body    = Get-Content -Raw '${bodyFile}'
+
+        try {
+            Invoke-WebRequest -Method POST -Uri \$deplUrl `
+                -Headers \$headers -ContentType 'application/json' `
+                -Body \$body -UseBasicParsing | Out-Null
+            Write-Host "Deployment created for instance ${instanceId}"
+        } catch {
+            \$code = [int]\$_.Exception.Response.StatusCode
+            if (\$code -eq 400) {
+                # Deployment already exists — GET its id then PATCH to update
+                \$getResp  = Invoke-WebRequest -Method GET -Uri \$deplUrl `
+                    -Headers \$headers -UseBasicParsing
+                \$deplData = \$getResp.Content | ConvertFrom-Json
+                if (\$deplData -is [array]) { \$deplData = \$deplData[0] }
+                \$deplId = \$deplData.id
+                if (-not \$deplId) {
+                    throw "Deployment already exists for ${instanceId} but could not find id in GET response: \$(\$getResp.Content)"
+                }
+                Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
+                    -Headers \$headers -ContentType 'application/json' `
+                    -Body \$body -UseBasicParsing | Out-Null
+                Write-Host "Deployment updated (id=\$deplId) for instance ${instanceId}"
+            } else {
+                \$msg = \$_.ErrorDetails.Message
+                if (-not \$msg) { \$msg = \$_.Exception.Message }
+                throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg"
+            }
+        }
+    """
 }
 
 // Apply policies from config, skipping any already applied (idempotent).
 def applyPolicies(String instanceId, List policies, String appName) {
-    def existingResp = apiCall('GET',
-        "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
-        null)
-    def respData = readJSON text: existingResp
-    // Anypoint may return a bare [] or a wrapped {"policies":[...]} object.
-    // Calling .collect{} on a Map iterates Map.Entry objects, breaking it.template access.
+    // Fetch already-applied policies — wrap in try/catch so a GET failure
+    // (e.g. 404 on a brand-new instance) doesn't abort the whole deployment.
     List policiesList = []
-    if (respData instanceof List) {
-        policiesList = respData as List
-    } else if (respData?.policies instanceof List) {
-        policiesList = respData.policies as List
+    try {
+        def existingResp = apiCall('GET',
+            "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
+            null)
+        def respData = readJSON text: existingResp
+        // Anypoint may return a bare [] or a wrapped {"policies":[...]} object.
+        if (respData instanceof List) {
+            policiesList = respData as List
+        } else if (respData?.policies instanceof List) {
+            policiesList = respData.policies as List
+        }
+    } catch (err) {
+        log('WARN', "Could not fetch existing policies for ${appName}: ${err.message} — will attempt all policies")
     }
+    // Handle various response shapes: template.assetId, implementationAsset.assetId, or top-level assetId
     def existingIds = policiesList.collect {
-        it.template?.assetId ?: it.implementationAsset?.assetId ?: ''
+        it.template?.assetId ?: it.implementationAsset?.assetId ?: it.assetId ?: ''
     }.findAll { it }
 
     policies.each { policy ->
