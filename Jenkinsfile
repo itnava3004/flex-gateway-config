@@ -252,6 +252,7 @@ pipeline {
 
                         apis.each { api ->
                             def label = api.instanceLabel
+                            stage("${wave}: ${api.appName}")   // appears as a column in Stage View
                             try {
                                 if (params.DRY_RUN) {
                                     log('INFO', "[DRY_RUN] wave=${wave}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
@@ -442,6 +443,7 @@ def applyPolicies(String instanceId, List policies, String appName) {
         def existingResp = apiCall('GET',
             "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
             null)
+        log('INFO', "GET policies response (first 500 chars): ${existingResp.take(500)}")
         def respData = readJSON text: existingResp
         // Anypoint may return a bare [] or a wrapped {"policies":[...]} object.
         if (respData instanceof List) {
@@ -471,14 +473,33 @@ def applyPolicies(String instanceId, List policies, String appName) {
         ])
         def policyFile = "policy-${instanceId}-${policy.assetId}.json"
         writeFile file: policyFile, text: body
-        try {
-            apiCall('POST',
-                "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
-                policyFile)
+        def policyUrl  = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies"
+        def policyResp = powershell(
+            script: """
+                \$ErrorActionPreference = 'Stop'
+                \$h = @{ Authorization = "Bearer \$env:ANYPOINT_TOKEN"; 'X-Correlation-ID' = "\$env:CORRELATION_ID" }
+                try {
+                    Invoke-WebRequest -Method POST -Uri '${policyUrl}' -Headers \$h `
+                        -ContentType 'application/json' -Body (Get-Content -Raw '${policyFile}') `
+                        -UseBasicParsing | Out-Null
+                    Write-Output 'APPLIED'
+                } catch {
+                    \$code = [int]\$_.Exception.Response.StatusCode
+                    if (\$code -eq 409) { Write-Output 'DUPLICATE' }
+                    else {
+                        \$m = \$_.ErrorDetails.Message; if (-not \$m) { \$m = \$_.Exception.Message }
+                        Write-Output "ERROR:\$code:\$m"
+                    }
+                }
+            """,
+            returnStdout: true
+        ).trim()
+        if (policyResp == 'APPLIED') {
             log('INFO', "Applied policy '${policy.assetId}' to ${appName}")
-        } catch (err) {
-            // Policy errors are non-fatal: log as WARN and continue
-            log('WARN', "Policy '${policy.assetId}' failed for ${appName}: ${err.message}")
+        } else if (policyResp == 'DUPLICATE') {
+            log('INFO', "Policy '${policy.assetId}' already applied to ${appName} — skipping (HTTP 409)")
+        } else {
+            log('WARN', "Policy '${policy.assetId}' failed for ${appName}: ${policyResp}")
         }
     }
 }
@@ -486,19 +507,39 @@ def applyPolicies(String instanceId, List policies, String appName) {
 // Poll Anypoint proxies xAPI until the Flex Gateway deployment reaches a terminal state.
 // API Manager's deployment.applicationStatus is always null for Flex Gateway (HY)
 // instances — the real status lives in the proxies xAPI deployment object.
+// If the status field is absent (UNKNOWN) for 3 consecutive checks, we give up and
+// log WARN so the build doesn't stall for 5 minutes on an unresolvable field.
 def validateInstance(String instanceId, String label) {
-    def deplUrl   = "${env.ANYPOINT_BASE_URL}/proxies/xapi/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/deployments"
-    def maxChecks = 30  // 5 minutes (30 × 10 s)
+    def deplUrl       = "${env.ANYPOINT_BASE_URL}/proxies/xapi/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/deployments"
+    def maxChecks     = 30  // 5 minutes (30 × 10 s)
+    def unknownStreak = 0
     for (int i = 0; i < maxChecks; i++) {
         sleep(time: 10, unit: 'SECONDS')
         def response = apiCall('GET', deplUrl, null)
+        // Log the raw response on the first poll to reveal the actual field structure
+        if (i == 0) {
+            log('INFO', "${label}  raw deployment response (first 500 chars): ${response.take(500)}")
+        }
         def respData = readJSON text: response
-        // Proxies xAPI returns either a single object {id, status, …} or an array [{…}]
-        def depl   = (respData instanceof List) ? (respData ? respData[0] : [:]) : (respData ?: [:])
-        def status = (depl.status ?: 'UNKNOWN').toUpperCase()
+        // Resolve deployment object — handles bare object, array, items-wrapper, and deployments-wrapper
+        def depl = [:]
+        if (respData instanceof List) {
+            depl = respData ? respData[0] : [:]
+        } else if (respData?.items instanceof List) {
+            def items = respData.items as List
+            depl = items ? items[0] : [:]
+        } else if (respData?.deployments instanceof List) {
+            def depls = respData.deployments as List
+            depl = depls ? depls[0] : [:]
+        } else {
+            depl = respData ?: [:]
+        }
+        // Try the most common status field names across Anypoint xAPI versions
+        def status = (depl.status ?: depl.applicationStatus ?: depl.deploymentStatus ?: 'UNKNOWN').toUpperCase()
         def pct    = (int)((i + 1) * 100 / maxChecks)
         def bar    = ('#' * (int)(pct / 5)).padRight(20, '-')
         log('INFO', "${label}  [${bar}] ${pct}%  check ${i + 1}/${maxChecks}: gatewayStatus=${status}")
+        currentBuild.description = "[${bar}] validating ${label}  (check ${i + 1}/${maxChecks})"
         if (status in ['DEPLOYED', 'STARTED', 'ACTIVE', 'APPLIED']) {
             log('INFO', "${label}  confirmed active on gateway (status=${status})")
             return
@@ -507,6 +548,15 @@ def validateInstance(String instanceId, String label) {
             // Flex GW can briefly report FAILED after a PATCH while still serving the prior config
             log('WARN', "${label}  gateway status=FAILED — API may still serve traffic; verify in Anypoint Runtime Manager")
             return
+        }
+        if (status == 'UNKNOWN') {
+            unknownStreak++
+            if (unknownStreak >= 3) {
+                log('WARN', "${label}  status field absent in proxies xAPI response for ${unknownStreak} consecutive checks — verify in Anypoint Runtime Manager; proceeding")
+                return
+            }
+        } else {
+            unknownStreak = 0
         }
     }
     log('WARN', "${label}  did not confirm DEPLOYED within ${(int)(maxChecks * 10 / 60)} min — check Anypoint Runtime Manager; proceeding")
