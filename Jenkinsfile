@@ -470,31 +470,56 @@ def deployInstance(String instanceId) {
         \$deplUrl = "\$env:ANYPOINT_BASE_URL/proxies/xapi/v1/organizations/\$env:ORG_ID/environments/\$env:ENV_ID/apis/${instanceId}/deployments"
         \$body    = Get-Content -Raw '${bodyFile}'
 
-        try {
-            Invoke-WebRequest -Method POST -Uri \$deplUrl `
-                -Headers \$headers -ContentType 'application/json' `
-                -Body \$body -UseBasicParsing | Out-Null
-            Write-Host "Deployment created for instance ${instanceId}"
-        } catch {
-            \$code = [int]\$_.Exception.Response.StatusCode
-            if (\$code -eq 400) {
-                # Deployment already exists — GET its id then PATCH to update
-                \$getResp  = Invoke-WebRequest -Method GET -Uri \$deplUrl `
-                    -Headers \$headers -UseBasicParsing
-                \$deplData = \$getResp.Content | ConvertFrom-Json
-                if (\$deplData -is [array]) { \$deplData = \$deplData[0] }
-                \$deplId = \$deplData.id
-                if (-not \$deplId) {
-                    throw "Deployment already exists for ${instanceId} but could not find id in GET response: \$(\$getResp.Content)"
+        # GET first — Anypoint auto-creates a pending deployment the moment a Flex GW instance
+        # is created, so POST immediately returns 400 UniqueConstraintError.
+        # We resolve the existing deployment id and PATCH instead of creating a new one.
+        \$getResp  = Invoke-WebRequest -Method GET -Uri \$deplUrl -Headers \$headers -UseBasicParsing
+        \$deplData = \$getResp.Content | ConvertFrom-Json
+        if (\$deplData -is [array]) { \$deplData = \$deplData[0] }
+        \$deplId   = if (\$deplData -and \$deplData.id) { \$deplData.id } else { \$null }
+
+        # If the pending deployment hasn't been assigned an id yet, wait 5 s and retry once
+        if (-not \$deplId) {
+            Start-Sleep -Seconds 5
+            \$getResp  = Invoke-WebRequest -Method GET -Uri \$deplUrl -Headers \$headers -UseBasicParsing
+            \$deplData = \$getResp.Content | ConvertFrom-Json
+            if (\$deplData -is [array]) { \$deplData = \$deplData[0] }
+            \$deplId   = if (\$deplData -and \$deplData.id) { \$deplData.id } else { \$null }
+        }
+
+        if (\$deplId) {
+            # Known deployment id — PATCH to update target/version in place
+            Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
+                -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
+            Write-Host "Deployment updated (id=\$deplId) for instance ${instanceId}"
+        } else {
+            # No existing deployment found — POST to create one
+            try {
+                Invoke-WebRequest -Method POST -Uri \$deplUrl `
+                    -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
+                Write-Host "Deployment created for instance ${instanceId}"
+            } catch {
+                \$code = [int]\$_.Exception.Response.StatusCode
+                if (\$code -eq 400) {
+                    # POST 400 despite GET finding nothing: deployment appeared between calls.
+                    # Wait 10 s for its id to be assigned, then PATCH.
+                    Start-Sleep -Seconds 10
+                    \$getResp  = Invoke-WebRequest -Method GET -Uri \$deplUrl -Headers \$headers -UseBasicParsing
+                    \$deplData = \$getResp.Content | ConvertFrom-Json
+                    if (\$deplData -is [array]) { \$deplData = \$deplData[0] }
+                    \$deplId   = if (\$deplData -and \$deplData.id) { \$deplData.id } else { \$null }
+                    if (\$deplId) {
+                        Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
+                            -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
+                        Write-Host "Deployment updated after retry (id=\$deplId) for instance ${instanceId}"
+                    } else {
+                        \$msg = \$_.ErrorDetails.Message; if (-not \$msg) { \$msg = \$_.Exception.Message }
+                        throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg — deployment id unavailable after GET retry"
+                    }
+                } else {
+                    \$msg = \$_.ErrorDetails.Message; if (-not \$msg) { \$msg = \$_.Exception.Message }
+                    throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg"
                 }
-                Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
-                    -Headers \$headers -ContentType 'application/json' `
-                    -Body \$body -UseBasicParsing | Out-Null
-                Write-Host "Deployment updated (id=\$deplId) for instance ${instanceId}"
-            } else {
-                \$msg = \$_.ErrorDetails.Message
-                if (-not \$msg) { \$msg = \$_.Exception.Message }
-                throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg"
             }
         }
     """
