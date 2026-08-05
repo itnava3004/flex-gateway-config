@@ -34,15 +34,6 @@ pipeline {
         string(name: 'APP_FILTER',
                defaultValue: '',
                description: 'Optional: comma/space-separated app names to limit within the wave (e.g. "payments-api,orders-api"). Blank = all apps in the wave.')
-        string(name: 'CONFIG_REPO_URL',
-               defaultValue: '',
-               description: 'Git URL of flex-gateway-config repo. Leave blank to use the repo this Jenkinsfile is checked in to.')
-        string(name: 'CONFIG_BRANCH',
-               defaultValue: 'master',
-               description: 'Branch of the config repo')
-        string(name: 'CONFIG_CRED_ID',
-               defaultValue: '',
-               description: 'Jenkins credentials ID for Git auth on the config repo (blank = public/anonymous)')
         booleanParam(name: 'DRY_RUN',
                defaultValue: true,
                description: 'Print the deployment plan without calling Anypoint APIs. Default true — set false to actually deploy.')
@@ -69,19 +60,8 @@ pipeline {
         stage('Checkout Config') {
             steps {
                 script {
-                    if (params.CONFIG_REPO_URL?.trim()) {
-                        log('INFO', "Cloning config repo: ${params.CONFIG_REPO_URL} @ ${params.CONFIG_BRANCH}")
-                        if (params.CONFIG_CRED_ID?.trim()) {
-                            git url: params.CONFIG_REPO_URL,
-                                branch: params.CONFIG_BRANCH,
-                                credentialsId: params.CONFIG_CRED_ID
-                        } else {
-                            git url: params.CONFIG_REPO_URL, branch: params.CONFIG_BRANCH
-                        }
-                    } else {
-                        log('INFO', 'Using the repo this Jenkinsfile is in (checkout scm)')
-                        checkout scm
-                    }
+                    log('INFO', 'Checking out the repo this Jenkinsfile lives in (checkout scm)')
+                    checkout scm
                 }
             }
         }
@@ -123,6 +103,23 @@ pipeline {
                     // Policy asset-id normalisation: use config.yaml's assetId directly.
                     // rate-limiting (simple, uses rateLimits[]) != rate-limiting-sla (SLA-tier).
                     def POLICY_ID_NORM = [:]
+
+                    // ── Common policies (applied to every API unless overridden) ──
+                    def commonPolicies = []
+                    if (fileExists('policies/common/policies.yaml')) {
+                        def commonCfg = readYaml file: 'policies/common/policies.yaml'
+                        commonPolicies = (commonCfg.policies ?: []).collect { p ->
+                            [
+                                assetId      : "${POLICY_ID_NORM[p.assetId] ?: p.assetId}",
+                                groupId      : "${p.groupId ?: env.MULESOFT_POLICY_GROUP}",
+                                policyVersion: "${p.policyVersion}",
+                                config       : p.config ?: [:]
+                            ]
+                        }
+                        if (commonPolicies) {
+                            log('INFO', "Common policies: ${commonPolicies.collect { it.assetId }.join(', ')}")
+                        }
+                    }
 
                     def waveApiMap = [:]
                     wavesToRun.each { wave ->
@@ -169,7 +166,7 @@ pipeline {
                             def proxyUri    = "${appOverlay.proxyUri    ?: 'http://0.0.0.0:8080'}"
                             log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}")
 
-                            def policies = (apiCfg.policies ?: []).collect { p ->
+                            def apiPolicies = (apiCfg.policies ?: []).collect { p ->
                                 [
                                     assetId      : "${POLICY_ID_NORM[p.assetId] ?: p.assetId}",
                                     groupId      : "${p.groupId ?: env.MULESOFT_POLICY_GROUP}",
@@ -177,6 +174,9 @@ pipeline {
                                     config       : p.config ?: [:]
                                 ]
                             }
+                            // Merge: API-specific policies take precedence; common policies fill in the rest
+                            def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
+                            def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
 
                             apiList << [
                                 appName      : "${appName}",
@@ -271,6 +271,7 @@ pipeline {
                                             log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
                                             updateInstance(instanceId, api)
                                         } else {
+                                            ensureExchangeAsset(api)
                                             instanceId = createInstance(api)
                                             log('INFO', "Created new instance id=${instanceId} for label=${label}")
                                         }
@@ -364,6 +365,68 @@ def updateInstance(String instanceId, Map api) {
         log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}")
     } catch (err) {
         log('WARN', "Could not update instance ${instanceId} endpoint: ${err.message}")
+    }
+}
+
+// Ensure the Exchange asset exists before creating an API Manager instance.
+// GET /exchange/api/v2/assets/{group}/{assetId}/{version}:
+//   200 → asset already there, nothing to do.
+//   404 → publish a minimal HTTP API asset via multipart POST so createInstance can reference it.
+def ensureExchangeAsset(Map api) {
+    def groupId    = env.ORG_ID
+    def assetId    = api.assetId
+    def version    = api.assetVersion
+    def apiVersion = "v${version.tokenize('.')[0]}"
+    def name       = api.appName
+    def checkUrl   = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets/${groupId}/${assetId}/${version}"
+    def publishUrl = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets"
+
+    def result = powershell(
+        script: """
+            \$ErrorActionPreference = 'Stop'
+            \$h = @{ Authorization = "Bearer \$env:ANYPOINT_TOKEN"; 'X-Correlation-ID' = "\$env:CORRELATION_ID" }
+
+            try {
+                Invoke-WebRequest -Method GET -Uri '${checkUrl}' -Headers \$h -UseBasicParsing | Out-Null
+                Write-Output 'EXISTS'
+            } catch {
+                \$code = [int]\$_.Exception.Response.StatusCode
+                if (\$code -eq 404) {
+                    # Build multipart/form-data body manually (PS 5.1 has no built-in helper)
+                    \$boundary  = [System.Guid]::NewGuid().ToString()
+                    \$CRLF      = "`r`n"
+                    \$b         = '--' + \$boundary + \$CRLF
+                    \$bodyStr   = (
+                        \$b + 'Content-Disposition: form-data; name="organizationId"' + \$CRLF + \$CRLF + '${groupId}'    + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="groupId"'        + \$CRLF + \$CRLF + '${groupId}'    + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="assetId"'        + \$CRLF + \$CRLF + '${assetId}'    + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="version"'        + \$CRLF + \$CRLF + '${version}'    + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="name"'           + \$CRLF + \$CRLF + '${name}'       + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="classifier"'     + \$CRLF + \$CRLF + 'http'          + \$CRLF +
+                        \$b + 'Content-Disposition: form-data; name="apiVersion"'     + \$CRLF + \$CRLF + '${apiVersion}' + \$CRLF +
+                        '--' + \$boundary + '--' + \$CRLF
+                    )
+                    \$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes(\$bodyStr)
+                    Invoke-WebRequest -Method POST -Uri '${publishUrl}' -Headers \$h `
+                        -ContentType "multipart/form-data; boundary=\$boundary" `
+                        -Body \$bodyBytes -UseBasicParsing | Out-Null
+                    Write-Output 'PUBLISHED'
+                } else {
+                    \$m = \$_.ErrorDetails.Message
+                    if (-not \$m) { \$m = \$_.Exception.Message }
+                    Write-Output "ERROR:\${code}:\$m"
+                }
+            }
+        """,
+        returnStdout: true
+    ).trim()
+
+    if (result == 'EXISTS') {
+        log('INFO', "Exchange asset exists: ${assetId}:${version}")
+    } else if (result == 'PUBLISHED') {
+        log('INFO', "Published to Exchange as HTTP API: ${assetId}:${version}")
+    } else {
+        throw new Exception("Exchange asset check/publish failed for ${assetId}:${version}: ${result}")
     }
 }
 
