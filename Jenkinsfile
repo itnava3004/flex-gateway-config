@@ -273,7 +273,44 @@ pipeline {
                     echo '═════════════════════════════════════════════════════════════'
                     def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
                     if (failed) {
-                        error "${failed.size()} of ${(ALL_RESULTS ?: []).size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
+                        // catchError marks this stage red and build FAILURE but lets
+                        // the Postman Collection stage run afterwards.
+                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                            error "${failed.size()} of ${(ALL_RESULTS ?: []).size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        stage('Postman Collection') {
+            when { expression { !params.DRY_RUN } }
+            steps {
+                script {
+                    def generate = false
+                    try {
+                        timeout(time: 5, unit: 'MINUTES') {
+                            generate = input(
+                                message: 'Generate a Postman collection for local API testing?',
+                                ok: 'Yes, generate',
+                                parameters: [
+                                    booleanParam(name: 'GENERATE', defaultValue: true,
+                                        description: 'Uncheck and click the button to skip')
+                                ]
+                            )
+                        }
+                    } catch (err) {
+                        log('INFO', 'Postman prompt timed out or was aborted — skipping')
+                    }
+                    if (generate) {
+                        def outFile = generatePostmanCollection()
+                        if (outFile) {
+                            archiveArtifacts artifacts: outFile, allowEmptyArchive: false
+                            log('INFO', "Postman collection ready — download from Build Artifacts on this build page")
+                        }
+                    } else {
+                        log('INFO', 'Postman collection skipped')
                     }
                 }
             }
@@ -694,6 +731,89 @@ def apiCall(String method, String url, String bodyFile) {
         returnStdout: true
     ).trim()
     return raw
+}
+
+// Build a Postman Collection v2.1 JSON for each successfully deployed API.
+// Reads publicPath from apis/<app>/config.yaml and publicHostname from the env overlay.
+// Returns the output filename (for archiveArtifacts), or null if nothing to write.
+def generatePostmanCollection() {
+    def deployedResults = (ALL_RESULTS ?: []).findAll { it.status == 'OK' }
+    if (!deployedResults) {
+        log('WARN', 'No successfully deployed APIs — skipping Postman collection')
+        return null
+    }
+
+    // Public hostname from overlay defaults (falls back to localhost)
+    def gatewayHost = 'localhost'
+    def overlayPath = "envs/${params.ENVIRONMENT}/overlay.yaml"
+    if (fileExists(overlayPath)) {
+        def ov = readYaml file: overlayPath
+        gatewayHost = "${ov.defaults?.publicHostname ?: 'localhost'}"
+    }
+
+    def folders = []
+
+    deployedResults.each { result ->
+        def api = (WAVE_API_MAP[result.wave] ?: []).find { it.instanceLabel == result.label }
+        if (!api) return
+
+        // Extract port from proxyUri: http://0.0.0.0:8082 → 8082
+        def proxyPort = api.proxyUri.tokenize(':').last().replaceAll('[^0-9]', '') ?: '8080'
+
+        // Re-read config.yaml to get the endpoint publicPaths
+        def apiCfg    = readYaml file: "apis/${api.appName}/config.yaml"
+        def endpoints = apiCfg.endpoints ?: []
+
+        // Headers driven by applied policies
+        def headers = [[key: 'Content-Type', value: 'application/json', type: 'text']]
+        if (api.policies?.any { it.assetId == 'client-id-enforcement' }) {
+            headers << [key: 'client_id',    value: '{{client_id}}',    type: 'text']
+            headers << [key: 'client_secret', value: '{{client_secret}}', type: 'text']
+        }
+
+        def requests = endpoints.collect { ep ->
+            def rawPath  = (ep.publicPath ?: '/').replaceAll('^/', '')
+            def segments = rawPath ? rawPath.split('/').toList() : []
+            [
+                name    : "${ep.name ?: api.appName}",
+                request : [
+                    method : 'GET',
+                    header : headers,
+                    url    : [
+                        raw     : "http://{{gateway_host}}:${proxyPort}/${rawPath}",
+                        protocol: 'http',
+                        host    : ['{{gateway_host}}'],
+                        port    : "${proxyPort}",
+                        path    : segments
+                    ]
+                ],
+                response: []
+            ]
+        }
+
+        folders << [
+            name: "${api.appName}  [${result.wave}]",
+            item: requests
+        ]
+    }
+
+    def collection = [
+        info    : [
+            name  : "Flex GW — ${params.ENVIRONMENT} / ${params.WAVE}",
+            schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+        ],
+        variable: [
+            [key: 'gateway_host',  value: "${gatewayHost}",       type: 'string'],
+            [key: 'client_id',     value: 'YOUR_CLIENT_ID',       type: 'string'],
+            [key: 'client_secret', value: 'YOUR_CLIENT_SECRET',   type: 'string']
+        ],
+        item    : folders
+    ]
+
+    def outFile = "postman-collection-${params.ENVIRONMENT}-${params.WAVE}-${env.BUILD_NUMBER}.json"
+    writeJSON file: outFile, json: collection, pretty: 4
+    log('INFO', "Postman collection written → ${outFile}")
+    return outFile
 }
 
 // JSON-structured, correlation-aware log line.
