@@ -239,11 +239,9 @@ pipeline {
                 script {
                     def allResults = []
 
-                    // Pre-compute total APIs across all waves for the overall progress bar
                     def totalApis = 0
                     WAVES_TO_RUN.each { w -> totalApis += (WAVE_API_MAP[w] ?: []).size() }
                     if (totalApis < 1) { totalApis = 1 }
-                    currentBuild.description = "[--------------------]   0%  0/${totalApis} APIs  env=${params.ENVIRONMENT}"
 
                     WAVES_TO_RUN.each { wave ->
                         def apis = WAVE_API_MAP[wave] ?: []
@@ -294,14 +292,10 @@ pipeline {
 
                             allResults << [wave: wave, label: label, status: stageStatus, instanceId: stageId]
 
-                            // ── Live progress bar (runs after every API, success or failure) ──
                             def done = allResults.size()
                             def pct  = (int)(done * 100 / totalApis)
-                            def fill = (int)(pct / 5)
-                            def bar  = ('#' * fill).padRight(20, '-')
-                            def lastStatus = allResults ? allResults[-1].status : '?'
-                            currentBuild.description = "[${bar}] ${pct}%  ${done}/${totalApis} APIs  env=${params.ENVIRONMENT}"
-                            echo "== PROGRESS [${bar}] ${pct}%  (${done}/${totalApis})  last=${label} → ${lastStatus} =="
+                            def bar  = ('#' * (int)(pct / 5)).padRight(20, '-')
+                            echo "== PROGRESS [${bar}] ${pct}%  (${done}/${totalApis})  last=${label} → ${allResults[-1].status} =="
                         }
                     }
 
@@ -312,16 +306,6 @@ pipeline {
                         echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
-
-                    // Final description on the build card (persists after build completes)
-                    def okCount   = allResults.findAll { it.status == 'OK' }.size()
-                    def failCount = allResults.findAll { it.status == 'FAILED' }.size()
-                    def dryCount  = allResults.findAll { it.status == 'DRY_RUN' }.size()
-                    currentBuild.description = failCount > 0
-                        ? "FAILED ${failCount}/${allResults.size()} | env=${params.ENVIRONMENT} wave=${params.WAVE?.trim()?.toUpperCase()}"
-                        : (dryCount > 0
-                            ? "DRY_RUN ${allResults.size()} APIs | env=${params.ENVIRONMENT}"
-                            : "OK ${okCount}/${allResults.size()} deployed | env=${params.ENVIRONMENT} wave=${params.WAVE?.trim()?.toUpperCase()}")
 
                     def failed = allResults.findAll { it.status == 'FAILED' }
                     if (failed) {
@@ -649,7 +633,6 @@ def validateInstance(String instanceId, String label) {
         def pct    = (int)((i + 1) * 100 / maxChecks)
         def bar    = ('#' * (int)(pct / 5)).padRight(20, '-')
         log('INFO', "${label}  [${bar}] ${pct}%  check ${i + 1}/${maxChecks}: gatewayStatus=${status}")
-        currentBuild.description = "[${bar}] validating ${label}  (check ${i + 1}/${maxChecks})"
         if (status in ['DEPLOYED', 'STARTED', 'ACTIVE', 'APPLIED']) {
             log('INFO', "${label}  confirmed active on gateway (status=${status})")
             return
