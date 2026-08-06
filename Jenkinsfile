@@ -477,7 +477,8 @@ def deployInstance(String instanceId) {
             \$r    = Invoke-WebRequest -Method GET -Uri \$url -Headers \$hdrs -UseBasicParsing
             \$data = \$r.Content | ConvertFrom-Json
             if (\$data -is [array]) { \$data = \$data[0] }
-            return if (\$data -and \$data.id) { \$data.id } else { \$null }
+            if (\$data -and \$data.id) { return \$data.id }
+            return \$null
         }
 
         # GET first — Anypoint auto-creates a pending deployment on Flex GW instance creation;
