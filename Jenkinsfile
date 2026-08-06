@@ -130,10 +130,12 @@ pipeline {
                             return
                         }
                         def manifest = readYaml file: manifestPath
-                        def apps = (manifest.apps ?: []).collect { "${it}" }
+                        // .toString() avoids GString vs String mismatch in List.contains()
+                        def apps = (manifest.apps ?: []).collect { it.toString() }
 
                         if (appFilter) {
-                            apps = apps.findAll { appFilter.contains(it) }
+                            def filterLower = appFilter.collect { it.toLowerCase() }
+                            apps = apps.findAll { filterLower.contains(it.toLowerCase()) }
                             log('INFO', "Wave ${wave}: filtered to [${apps.join(', ')}]")
                         }
 
