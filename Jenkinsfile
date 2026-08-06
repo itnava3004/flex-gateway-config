@@ -283,13 +283,11 @@ pipeline {
             }
         }
 
-        // Only shown when some deployments failed — offers a partial collection.
-        // On full success the post { success } block auto-generates without prompting.
         // ──────────────────────────────────────────────────────────────────── //
         stage('Postman Collection') {
             when {
                 expression {
-                    !params.DRY_RUN && (ALL_RESULTS ?: []).any { it.status == 'FAILED' }
+                    !params.DRY_RUN && (ALL_RESULTS ?: []).any { it.status == 'OK' }
                 }
             }
             steps {
@@ -297,7 +295,7 @@ pipeline {
                     try {
                         timeout(time: 5, unit: 'MINUTES') {
                             input(
-                                message: 'Some deployments failed. Generate Postman collection for the successfully deployed APIs?',
+                                message: 'Generate Postman collection for local API testing?',
                                 ok: 'Generate Postman Collection'
                             )
                         }
@@ -315,22 +313,7 @@ pipeline {
     }
 
     post {
-        success {
-            script {
-                echo "SUCCESS: all APIs deployed to ${env.FLEX_TARGET_NAME} (${params.ENVIRONMENT})"
-                if (!params.DRY_RUN) {
-                    try {
-                        def outFile = generatePostmanCollection()
-                        if (outFile) {
-                            archiveArtifacts artifacts: outFile, allowEmptyArchive: false
-                            echo "Postman collection generated automatically — download from Build Artifacts"
-                        }
-                    } catch (err) {
-                        echo "Postman collection generation failed: ${err.message}"
-                    }
-                }
-            }
-        }
+        success { echo "SUCCESS: all APIs deployed to ${env.FLEX_TARGET_NAME} (${params.ENVIRONMENT})" }
         failure { echo "FAILURE: one or more deployments failed. correlationId=${env.CORRELATION_ID}" }
         always  { script { env.ANYPOINT_TOKEN = '' } }
     }
