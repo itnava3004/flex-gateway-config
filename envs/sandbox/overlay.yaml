@@ -12,7 +12,7 @@ defaults:
 # Until then, deploy R1 and R2 separately (each wave reuses an available port).
 apps:
   payments-api:
-    proxyUri: http://0.0.0.0:8081
+    proxyUri: http://0.0.0.0:8082
   orders-api:
     proxyUri: http://0.0.0.0:8082
   customer-api:
