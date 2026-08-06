@@ -1,6 +1,6 @@
 app: payments-api
 assetId: payments-api
-version: 1.0.1
+version: 1.0.0
 endpoints:
   - name: payments-charge
     uri: https://l7-gw.fxf.internal/payments/charge
