@@ -28,9 +28,9 @@ pipeline {
         choice(name: 'ENVIRONMENT',
                choices: ['dev', 'test', 'qa', 'preprod', 'prod','sandbox'],
                description: 'Target Anypoint environment')
-        choice(name: 'WAVE',
-               choices: ['all', 'R1', 'R2', 'R3', 'R4'],
-               description: '"all" runs R1 → R2 → … in sequence; pick a specific wave for targeted deploy')
+        string(name: 'WAVE',
+               defaultValue: 'R1',
+               description: 'Wave to run: R1, R2, R3, R4, or ALL. Case-insensitive.')
         string(name: 'APP_FILTER',
                defaultValue: '',
                description: 'Optional: comma/space-separated app names to limit within the wave (e.g. "payments-api,orders-api"). Blank = all apps in the wave.')
@@ -89,9 +89,10 @@ pipeline {
                     log('INFO', "Target: env=${params.ENVIRONMENT} flexTarget=${env.FLEX_TARGET_NAME}")
 
                     // ── Determine waves ────────────────────────────────────────
-                    def wavesToRun = params.WAVE == 'all'
+                    def waveInput = params.WAVE?.trim()?.toUpperCase() ?: 'R1'
+                    def wavesToRun = waveInput == 'ALL'
                         ? ['R1', 'R2', 'R3', 'R4'].findAll { fileExists("waves/${it}/manifest.yaml") }
-                        : [params.WAVE]
+                        : [waveInput]
                     log('INFO', "Waves to run: ${wavesToRun.join(', ')}")
 
                     // ── Optional app-level filter ──────────────────────────────
@@ -106,8 +107,8 @@ pipeline {
 
                     // ── Common policies (applied to every API unless overridden) ──
                     def commonPolicies = []
-                    if (fileExists('policies/common/policies.yaml')) {
-                        def commonCfg = readYaml file: 'policies/common/policies.yaml'
+                    if (fileExists('common/policies.yaml')) {
+                        def commonCfg = readYaml file: 'common/policies.yaml'
                         commonPolicies = (commonCfg.policies ?: []).collect { p ->
                             [
                                 assetId      : "${POLICY_ID_NORM[p.assetId] ?: p.assetId}",
@@ -315,10 +316,10 @@ pipeline {
                     def failCount = allResults.findAll { it.status == 'FAILED' }.size()
                     def dryCount  = allResults.findAll { it.status == 'DRY_RUN' }.size()
                     currentBuild.description = failCount > 0
-                        ? "FAILED ${failCount}/${allResults.size()} | env=${params.ENVIRONMENT} wave=${params.WAVE}"
+                        ? "FAILED ${failCount}/${allResults.size()} | env=${params.ENVIRONMENT} wave=${params.WAVE?.trim()?.toUpperCase()}"
                         : (dryCount > 0
                             ? "DRY_RUN ${allResults.size()} APIs | env=${params.ENVIRONMENT}"
-                            : "OK ${okCount}/${allResults.size()} deployed | env=${params.ENVIRONMENT} wave=${params.WAVE}")
+                            : "OK ${okCount}/${allResults.size()} deployed | env=${params.ENVIRONMENT} wave=${params.WAVE?.trim()?.toUpperCase()}")
 
                     def failed = allResults.findAll { it.status == 'FAILED' }
                     if (failed) {
