@@ -198,6 +198,7 @@ pipeline {
 
                     WAVES_TO_RUN = wavesToRun
                     WAVE_API_MAP = waveApiMap
+                    ALL_RESULTS  = []
                 }
             }
         }
@@ -233,83 +234,46 @@ pipeline {
             }
         }
 
+        // Each wave is a top-level Declarative stage so the Stage View plugin
+        // renders them as proper grid columns. The `when` condition skips waves
+        // not selected by the WAVE parameter (shown as grey in Stage View).
         // ──────────────────────────────────────────────────────────────────── //
-        stage('Deploy Waves') {
+        stage('Wave R1') {
+            when { expression { 'R1' in (WAVES_TO_RUN ?: []) } }
+            steps { script { deployWave('R1') } }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        stage('Wave R2') {
+            when { expression { 'R2' in (WAVES_TO_RUN ?: []) } }
+            steps { script { deployWave('R2') } }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        stage('Wave R3') {
+            when { expression { 'R3' in (WAVES_TO_RUN ?: []) } }
+            steps { script { deployWave('R3') } }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        stage('Wave R4') {
+            when { expression { 'R4' in (WAVES_TO_RUN ?: []) } }
+            steps { script { deployWave('R4') } }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        stage('Summary') {
             steps {
                 script {
-                    def allResults = []
-
-                    def totalApis = 0
-                    WAVES_TO_RUN.each { w -> totalApis += (WAVE_API_MAP[w] ?: []).size() }
-                    if (totalApis < 1) { totalApis = 1 }
-
-                    WAVES_TO_RUN.each { wave ->
-                        def apis = WAVE_API_MAP[wave] ?: []
-                        if (!apis) {
-                            log('INFO', "Wave ${wave} has no APIs after filtering — skipping")
-                            return
-                        }
-                        echo "─────────────────────────── WAVE ${wave} ───────────────────────────"
-
-                        apis.each { api ->
-                            def label       = api.instanceLabel
-                            def stageStatus = 'FAILED'
-                            def stageId     = '-'
-
-                            // stage() with a block body registers in the Stage View grid.
-                            // catchError lets the loop continue to the next API on failure
-                            // while still marking this column RED in the grid.
-                            stage("${wave}: ${api.appName}") {
-                                if (params.DRY_RUN) {
-                                    log('INFO', "[DRY_RUN] wave=${wave}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
-                                    log('INFO', "[DRY_RUN]   upstream=${api.upstreamUri}  proxy=${api.proxyUri}")
-                                    log('INFO', "[DRY_RUN]   policies=${api.policies?.collect { it.assetId }}")
-                                    stageStatus = 'DRY_RUN'
-                                } else {
-                                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                                        def instanceId = findExistingInstance(api.assetId, label)
-                                        if (instanceId) {
-                                            log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
-                                            updateInstance(instanceId, api)
-                                        } else {
-                                            ensureExchangeAsset(api)
-                                            instanceId = createInstance(api)
-                                            log('INFO', "Created new instance id=${instanceId} for label=${label}")
-                                        }
-
-                                        deployInstance(instanceId)
-
-                                        if (!params.SKIP_POLICIES && api.policies) {
-                                            applyPolicies(instanceId, api.policies, api.appName)
-                                        }
-
-                                        validateInstance(instanceId, label)
-                                        stageId     = instanceId
-                                        stageStatus = 'OK'
-                                    }
-                                }
-                            }
-
-                            allResults << [wave: wave, label: label, status: stageStatus, instanceId: stageId]
-
-                            def done = allResults.size()
-                            def pct  = (int)(done * 100 / totalApis)
-                            def bar  = ('#' * (int)(pct / 5)).padRight(20, '-')
-                            echo "== PROGRESS [${bar}] ${pct}%  (${done}/${totalApis})  last=${label} → ${allResults[-1].status} =="
-                        }
-                    }
-
-                    // ── Summary ───────────────────────────────────────────────
                     echo '════════════════════ DEPLOYMENT SUMMARY ════════════════════'
-                    allResults.each { r ->
+                    (ALL_RESULTS ?: []).each { r ->
                         def icon = r.status == 'OK' ? 'OK      ' : (r.status == 'DRY_RUN' ? 'DRY_RUN ' : 'FAILED  ')
                         echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
-
-                    def failed = allResults.findAll { it.status == 'FAILED' }
+                    def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
                     if (failed) {
-                        error "${failed.size()} of ${allResults.size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
+                        error "${failed.size()} of ${(ALL_RESULTS ?: []).size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
                     }
                 }
             }
@@ -326,6 +290,55 @@ pipeline {
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
+
+// Deploy all APIs for a single wave sequentially. Results appended to ALL_RESULTS.
+// catchError keeps the loop alive on per-API failure while marking the stage red.
+def deployWave(String wave) {
+    def apis = WAVE_API_MAP[wave] ?: []
+    if (!apis) {
+        log('INFO', "Wave ${wave} has no APIs after filtering — skipping")
+        return
+    }
+    def totalApis = WAVE_API_MAP.values().flatten().size() ?: 1
+    echo "─────────────────────────── WAVE ${wave} ───────────────────────────"
+
+    apis.each { api ->
+        def label       = api.instanceLabel
+        def stageStatus = 'FAILED'
+        def stageId     = '-'
+
+        if (params.DRY_RUN) {
+            log('INFO', "[DRY_RUN] wave=${wave}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
+            log('INFO', "[DRY_RUN]   upstream=${api.upstreamUri}  proxy=${api.proxyUri}")
+            log('INFO', "[DRY_RUN]   policies=${api.policies?.collect { it.assetId }}")
+            stageStatus = 'DRY_RUN'
+        } else {
+            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                def instanceId = findExistingInstance(api.assetId, label)
+                if (instanceId) {
+                    log('INFO', "Reusing existing instance id=${instanceId} for label=${label}")
+                    updateInstance(instanceId, api)
+                } else {
+                    ensureExchangeAsset(api)
+                    instanceId = createInstance(api)
+                    log('INFO', "Created new instance id=${instanceId} for label=${label}")
+                }
+                deployInstance(instanceId)
+                if (!params.SKIP_POLICIES && api.policies) {
+                    applyPolicies(instanceId, api.policies, api.appName)
+                }
+                validateInstance(instanceId, label)
+                stageId     = instanceId
+                stageStatus = 'OK'
+            }
+        }
+        ALL_RESULTS << [wave: wave, label: label, status: stageStatus, instanceId: stageId]
+        def done = ALL_RESULTS.size()
+        def pct  = (int)(done * 100 / totalApis)
+        def bar  = ('#' * (int)(pct / 5)).padRight(20, '-')
+        echo "== PROGRESS [${bar}] ${pct}%  (${done}/${totalApis})  last=${label} → ${ALL_RESULTS[-1].status} =="
+    }
+}
 
 // Return the Anypoint instance id if an API instance with the same assetId + label
 // already exists, or null. Makes re-runs idempotent.
