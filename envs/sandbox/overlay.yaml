@@ -16,4 +16,4 @@ apps:
   orders-api:
     proxyUri: http://0.0.0.0:8082
   customer-api:
-    proxyUri: http://0.0.0.0:8081
+    proxyUri: http://0.0.0.0:8083
