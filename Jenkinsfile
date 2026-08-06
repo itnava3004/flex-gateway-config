@@ -407,10 +407,20 @@ def ensureExchangeAsset(Map api) {
                         '--' + \$boundary + '--' + \$CRLF
                     )
                     \$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes(\$bodyStr)
-                    Invoke-WebRequest -Method POST -Uri '${publishUrl}' -Headers \$h `
-                        -ContentType "multipart/form-data; boundary=\$boundary" `
-                        -Body \$bodyBytes -UseBasicParsing | Out-Null
-                    Write-Output 'PUBLISHED'
+                    try {
+                        Invoke-WebRequest -Method POST -Uri '${publishUrl}' -Headers \$h `
+                            -ContentType "multipart/form-data; boundary=\$boundary" `
+                            -Body \$bodyBytes -UseBasicParsing | Out-Null
+                        Write-Output 'PUBLISHED'
+                    } catch {
+                        \$pc = [int]\$_.Exception.Response.StatusCode
+                        \$pm = \$_.ErrorDetails.Message; if (-not \$pm) { \$pm = \$_.Exception.Message }
+                        if (\$pc -eq 409 -and \$pm -match 'deleted') {
+                            Write-Output 'DELETED_VERSION'
+                        } else {
+                            Write-Output "ERROR:\${pc}:\$pm"
+                        }
+                    }
                 } else {
                     \$m = \$_.ErrorDetails.Message
                     if (-not \$m) { \$m = \$_.Exception.Message }
@@ -425,6 +435,8 @@ def ensureExchangeAsset(Map api) {
         log('INFO', "Exchange asset exists: ${assetId}:${version}")
     } else if (result == 'PUBLISHED') {
         log('INFO', "Published to Exchange as HTTP API: ${assetId}:${version}")
+    } else if (result == 'DELETED_VERSION') {
+        throw new Exception("Exchange asset ${assetId}:${version} was previously deleted — bump 'version' in apis/${api.appName}/config.yaml to a higher number and re-run.")
     } else {
         throw new Exception("Exchange asset check/publish failed for ${assetId}:${version}: ${result}")
     }
