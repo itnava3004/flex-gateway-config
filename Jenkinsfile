@@ -225,16 +225,14 @@ pipeline {
                         passwordVariable: 'CLIENT_SECRET')]) {
                     script {
                         log('INFO', 'Requesting OAuth2 access token via client_credentials grant')
-                        def token = powershell(
+                        def token = sh(
                             script: '''
-                                $ErrorActionPreference = "Stop"
-                                $body = '{"grant_type":"client_credentials","client_id":"' + $env:CLIENT_ID + '","client_secret":"' + $env:CLIENT_SECRET + '"}'
-                                $resp = Invoke-WebRequest -Method POST `
-                                    -Uri "$env:ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" `
-                                    -ContentType "application/json" `
-                                    -Body $body `
-                                    -UseBasicParsing
-                                ($resp.Content | ConvertFrom-Json).access_token
+                                set -e
+                                curl -s -X POST \
+                                    "$ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" \
+                                    -H "Content-Type: application/json" \
+                                    -d "{\"grant_type\":\"client_credentials\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\"}" \
+                                    | jq -r '.access_token'
                             ''',
                             returnStdout: true
                         ).trim()
@@ -419,52 +417,46 @@ def ensureExchangeAsset(Map api) {
     def checkUrl   = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets/${groupId}/${assetId}/${version}"
     def publishUrl = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets"
 
-    def result = powershell(
+    def result = sh(
         script: """
-            \$ErrorActionPreference = 'Stop'
-            \$h = @{ Authorization = "Bearer \$env:ANYPOINT_TOKEN"; 'X-Correlation-ID' = "\$env:CORRELATION_ID" }
-
-            try {
-                Invoke-WebRequest -Method GET -Uri '${checkUrl}' -Headers \$h -UseBasicParsing | Out-Null
-                Write-Output 'EXISTS'
-            } catch {
-                \$code = [int]\$_.Exception.Response.StatusCode
-                if (\$code -eq 404) {
-                    # Build multipart/form-data body manually (PS 5.1 has no built-in helper)
-                    \$boundary  = [System.Guid]::NewGuid().ToString()
-                    \$CRLF      = "`r`n"
-                    \$b         = '--' + \$boundary + \$CRLF
-                    \$bodyStr   = (
-                        \$b + 'Content-Disposition: form-data; name="organizationId"' + \$CRLF + \$CRLF + '${groupId}'    + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="groupId"'        + \$CRLF + \$CRLF + '${groupId}'    + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="assetId"'        + \$CRLF + \$CRLF + '${assetId}'    + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="version"'        + \$CRLF + \$CRLF + '${version}'    + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="name"'           + \$CRLF + \$CRLF + '${name}'       + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="classifier"'     + \$CRLF + \$CRLF + 'http'          + \$CRLF +
-                        \$b + 'Content-Disposition: form-data; name="apiVersion"'     + \$CRLF + \$CRLF + '${apiVersion}' + \$CRLF +
-                        '--' + \$boundary + '--' + \$CRLF
-                    )
-                    \$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes(\$bodyStr)
-                    try {
-                        Invoke-WebRequest -Method POST -Uri '${publishUrl}' -Headers \$h `
-                            -ContentType "multipart/form-data; boundary=\$boundary" `
-                            -Body \$bodyBytes -UseBasicParsing | Out-Null
-                        Write-Output 'PUBLISHED'
-                    } catch {
-                        \$pc = [int]\$_.Exception.Response.StatusCode
-                        \$pm = \$_.ErrorDetails.Message; if (-not \$pm) { \$pm = \$_.Exception.Message }
-                        if (\$pc -eq 409 -and \$pm -match 'deleted') {
-                            Write-Output 'DELETED_VERSION'
-                        } else {
-                            Write-Output "ERROR:\${pc}:\$pm"
-                        }
-                    }
-                } else {
-                    \$m = \$_.ErrorDetails.Message
-                    if (-not \$m) { \$m = \$_.Exception.Message }
-                    Write-Output "ERROR:\${code}:\$m"
-                }
-            }
+            set -e
+            TMP=\$(mktemp)
+            HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                '${checkUrl}')
+            if [ "\$HTTP" = "200" ]; then
+                rm -f "\$TMP"; echo 'EXISTS'
+            elif [ "\$HTTP" = "404" ]; then
+                rm -f "\$TMP"
+                TMP2=\$(mktemp)
+                HTTP_POST=\$(curl -s -o "\$TMP2" -w "%{http_code}" \\
+                    -X POST '${publishUrl}' \\
+                    -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                    -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                    -F "organizationId=${groupId}" \\
+                    -F "groupId=${groupId}" \\
+                    -F "assetId=${assetId}" \\
+                    -F "version=${version}" \\
+                    -F "name=${name}" \\
+                    -F "classifier=http" \\
+                    -F "apiVersion=${apiVersion}")
+                BODY=\$(cat "\$TMP2"); rm -f "\$TMP2"
+                if [ "\$HTTP_POST" = "200" ] || [ "\$HTTP_POST" = "201" ]; then
+                    echo 'PUBLISHED'
+                elif [ "\$HTTP_POST" = "409" ]; then
+                    if echo "\$BODY" | grep -q 'deleted'; then
+                        echo 'DELETED_VERSION'
+                    else
+                        echo "ERROR:\${HTTP_POST}:\$BODY"
+                    fi
+                else
+                    echo "ERROR:\${HTTP_POST}:\$BODY"
+                fi
+            else
+                BODY=\$(cat "\$TMP"); rm -f "\$TMP"
+                echo "ERROR:\${HTTP}:\$BODY"
+            fi
         """,
         returnStdout: true
     ).trim()
@@ -513,67 +505,63 @@ def deployInstance(String instanceId) {
     def bodyFile = "deploy-${instanceId}.json"
     writeFile file: bodyFile, text: body
 
-    powershell """
-        \$ErrorActionPreference = "Stop"
-        \$headers = @{
-            'Authorization'    = "Bearer \$env:ANYPOINT_TOKEN"
-            'X-Correlation-ID' = "\$env:CORRELATION_ID"
-        }
-        \$deplUrl = "\$env:ANYPOINT_BASE_URL/proxies/xapi/v1/organizations/\$env:ORG_ID/environments/\$env:ENV_ID/apis/${instanceId}/deployments"
-        \$body    = Get-Content -Raw '${bodyFile}'
+    sh """
+        set -e
+        DEPL_URL="\$ANYPOINT_BASE_URL/proxies/xapi/v1/organizations/\$ORG_ID/environments/\$ENV_ID/apis/${instanceId}/deployments"
 
-        # Resolve the deployment id from a GET response — handles [], [null], and [{id:...}]
-        function Get-DeployId(\$url, \$hdrs) {
-            \$r    = Invoke-WebRequest -Method GET -Uri \$url -Headers \$hdrs -UseBasicParsing
-            \$data = \$r.Content | ConvertFrom-Json
-            if (\$data -is [array]) { \$data = \$data[0] }
-            if (\$data -and \$data.id) { return \$data.id }
-            return \$null
+        get_deploy_id() {
+            curl -s \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                "\$DEPL_URL" | jq -r 'if type == "array" then .[0].id else .id end // empty' 2>/dev/null || true
         }
 
-        # GET first — Anypoint auto-creates a pending deployment on Flex GW instance creation;
-        # id assignment may take a few seconds, so retry once after 5 s if null.
-        \$deplId = Get-DeployId \$deplUrl \$headers
-        if (-not \$deplId) {
-            Start-Sleep -Seconds 5
-            \$deplId = Get-DeployId \$deplUrl \$headers
-        }
+        DEPL_ID=\$(get_deploy_id)
+        if [ -z "\$DEPL_ID" ] || [ "\$DEPL_ID" = "null" ]; then
+            sleep 5
+            DEPL_ID=\$(get_deploy_id)
+        fi
 
-        if (\$deplId) {
-            Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
-                -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
-            Write-Host "Deployment updated (id=\$deplId) for instance ${instanceId}"
-        } else {
-            try {
-                Invoke-WebRequest -Method POST -Uri \$deplUrl `
-                    -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
-                Write-Host "Deployment created for instance ${instanceId}"
-            } catch {
-                \$code = [int]\$_.Exception.Response.StatusCode
-                \$msg  = \$_.ErrorDetails.Message; if (-not \$msg) { \$msg = \$_.Exception.Message }
-
-                if (\$code -eq 400 -and (\$msg -match 'already in use' -or \$msg -match 'InvalidOperationError')) {
-                    # Port/path conflict — a different API holds this listener on the Flex Target.
-                    # This is a config problem; retrying won't help.
-                    throw "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$msg``nFix: assign a different proxyUri in envs/${params.ENVIRONMENT}/overlay.yaml, or undeploy the conflicting API first."
-                }
-                if (\$code -eq 400) {
-                    # UniqueConstraintError: deployment appeared between our GET and POST.
-                    # Wait 10 s for its id to be assigned, then PATCH.
-                    Start-Sleep -Seconds 10
-                    \$deplId = Get-DeployId \$deplUrl \$headers
-                    if (\$deplId) {
-                        Invoke-WebRequest -Method PATCH -Uri "\$deplUrl/\$deplId" `
-                            -Headers \$headers -ContentType 'application/json' -Body \$body -UseBasicParsing | Out-Null
-                        Write-Host "Deployment updated after retry (id=\$deplId) for instance ${instanceId}"
-                    } else {
-                        throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg — deployment id still unavailable after 10 s retry"
-                    }
-                } else {
-                    throw "Deploy failed [POST \$deplUrl] HTTP \$code : \$msg"
-                }
-            }
-        }
+        if [ -n "\$DEPL_ID" ] && [ "\$DEPL_ID" != "null" ]; then
+            curl -s -X PATCH "\$DEPL_URL/\$DEPL_ID" \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                -H "Content-Type: application/json" \\
+                --data "@${bodyFile}" > /dev/null
+            echo "Deployment updated (id=\$DEPL_ID) for instance ${instanceId}"
+        else
+            TMP=\$(mktemp)
+            HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" -X POST "\$DEPL_URL" \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                -H "Content-Type: application/json" \\
+                --data "@${bodyFile}")
+            BODY=\$(cat "\$TMP"); rm -f "\$TMP"
+            if [ "\$HTTP" = "200" ] || [ "\$HTTP" = "201" ]; then
+                echo "Deployment created for instance ${instanceId}"
+            elif [ "\$HTTP" = "400" ]; then
+                if echo "\$BODY" | grep -q 'already in use\\|InvalidOperationError'; then
+                    echo "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$BODY\\nFix: assign a different proxyUri in envs/${params.ENVIRONMENT}/overlay.yaml, or undeploy the conflicting API first." >&2
+                    exit 1
+                fi
+                sleep 10
+                DEPL_ID=\$(get_deploy_id)
+                if [ -n "\$DEPL_ID" ] && [ "\$DEPL_ID" != "null" ]; then
+                    curl -s -X PATCH "\$DEPL_URL/\$DEPL_ID" \\
+                        -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                        -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                        -H "Content-Type: application/json" \\
+                        --data "@${bodyFile}" > /dev/null
+                    echo "Deployment updated after retry (id=\$DEPL_ID) for instance ${instanceId}"
+                else
+                    echo "Deploy failed HTTP \$HTTP: \$BODY — deployment id unavailable after 10s retry" >&2
+                    exit 1
+                fi
+            else
+                echo "Deploy failed HTTP \$HTTP: \$BODY" >&2
+                exit 1
+            fi
+        fi
     """
 }
 
@@ -619,23 +607,24 @@ def applyPolicies(String instanceId, List policies, String appName) {
         def policyFile = "policy-${instanceId}-${policy.assetId}.json"
         writeFile file: policyFile, text: body
         def policyUrl  = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies"
-        def policyResp = powershell(
+        def policyResp = sh(
             script: """
-                \$ErrorActionPreference = 'Stop'
-                \$h = @{ Authorization = "Bearer \$env:ANYPOINT_TOKEN"; 'X-Correlation-ID' = "\$env:CORRELATION_ID" }
-                try {
-                    Invoke-WebRequest -Method POST -Uri '${policyUrl}' -Headers \$h `
-                        -ContentType 'application/json' -Body (Get-Content -Raw '${policyFile}') `
-                        -UseBasicParsing | Out-Null
-                    Write-Output 'APPLIED'
-                } catch {
-                    \$code = [int]\$_.Exception.Response.StatusCode
-                    if (\$code -eq 409) { Write-Output 'DUPLICATE' }
-                    else {
-                        \$m = \$_.ErrorDetails.Message; if (-not \$m) { \$m = \$_.Exception.Message }
-                        Write-Output "ERROR:\${code}:\$m"
-                    }
-                }
+                set -e
+                TMP=\$(mktemp)
+                HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
+                    -X POST '${policyUrl}' \\
+                    -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                    -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                    -H "Content-Type: application/json" \\
+                    --data "@${policyFile}")
+                BODY=\$(cat "\$TMP"); rm -f "\$TMP"
+                if [ "\$HTTP" = "200" ] || [ "\$HTTP" = "201" ]; then
+                    echo 'APPLIED'
+                elif [ "\$HTTP" = "409" ]; then
+                    echo 'DUPLICATE'
+                else
+                    echo "ERROR:\${HTTP}:\$BODY"
+                fi
             """,
             returnStdout: true
         ).trim()
@@ -706,28 +695,26 @@ def validateInstance(String instanceId, String label) {
     log('WARN', "${label}  did not confirm DEPLOYED within ${(int)(maxChecks * 10 / 60)} min — check Anypoint Runtime Manager; proceeding")
 }
 
-// Authenticated Anypoint API call using PowerShell Invoke-WebRequest (Windows-native).
+// Authenticated Anypoint API call using curl + jq (Linux-compatible).
 // Token is never logged — masked by withCredentials in the Authenticate stage.
 def apiCall(String method, String url, String bodyFile) {
-    def bodyArg = bodyFile ? "-Body (Get-Content -Raw '${bodyFile}')" : ''
-    def raw = powershell(
+    def bodyArg = bodyFile ? "--data @\"${bodyFile}\"" : ''
+    def raw = sh(
         script: """
-            \$ErrorActionPreference = "Stop"
-            \$headers = @{
-                'Authorization'    = "Bearer \$env:ANYPOINT_TOKEN"
-                'X-Correlation-ID' = "\$env:CORRELATION_ID"
-            }
-            try {
-                \$resp = Invoke-WebRequest -Method '${method}' -Uri '${url}' `
-                    -Headers \$headers -ContentType 'application/json' `
-                    ${bodyArg} -UseBasicParsing
-                Write-Output \$resp.Content
-            } catch {
-                \$code = [int]\$_.Exception.Response.StatusCode
-                \$msg  = \$_.ErrorDetails.Message
-                if (-not \$msg) { \$msg = \$_.Exception.Message }
-                throw "API call failed [${method} ${url}] HTTP \${code}: \${msg}"
-            }
+            set -e
+            TMP=\$(mktemp)
+            HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
+                -X '${method}' '${url}' \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID" \\
+                -H "Content-Type: application/json" \\
+                ${bodyArg})
+            BODY=\$(cat "\$TMP"); rm -f "\$TMP"
+            if [ "\$HTTP" -lt 200 ] || [ "\$HTTP" -ge 300 ]; then
+                echo "API call failed [${method} ${url}] HTTP \$HTTP: \$BODY" >&2
+                exit 1
+            fi
+            printf '%s' "\$BODY"
         """,
         returnStdout: true
     ).trim()
