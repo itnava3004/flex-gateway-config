@@ -228,10 +228,14 @@ pipeline {
                         def token = sh(
                             script: '''
                                 set -e
+                                BODY=$(jq -n \
+                                    --arg id "$CLIENT_ID" \
+                                    --arg secret "$CLIENT_SECRET" \
+                                    '{"grant_type":"client_credentials","client_id":$id,"client_secret":$secret}')
                                 curl -s -X POST \
                                     "$ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" \
                                     -H "Content-Type: application/json" \
-                                    -d "{\"grant_type\":\"client_credentials\",\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\"}" \
+                                    -d "$BODY" \
                                     | jq -r '.access_token'
                             ''',
                             returnStdout: true
