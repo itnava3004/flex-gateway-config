@@ -16,7 +16,7 @@
 // Secrets come from the Jenkins credentials store — never from the repo.
 //
 // Required Jenkins plugins : Pipeline Utility Steps (readYaml, readJSON, writeJSON)
-// Required agent tools     : git, curl, jq
+// Required agent tools     : git, curl, python3
 // Required credentials     : anypoint-connected-app-<env>
 //                             (Kind: Username+Password, user=CLIENT_ID, pass=CLIENT_SECRET)
 // =============================================================================
@@ -228,15 +228,12 @@ pipeline {
                         def token = sh(
                             script: '''
                                 set -e
-                                BODY=$(jq -n \
-                                    --arg id "$CLIENT_ID" \
-                                    --arg secret "$CLIENT_SECRET" \
-                                    '{"grant_type":"client_credentials","client_id":$id,"client_secret":$secret}')
+                                BODY='{"grant_type":"client_credentials","client_id":"'"$CLIENT_ID"'","client_secret":"'"$CLIENT_SECRET"'"}'
                                 curl -s -X POST \
                                     "$ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" \
                                     -H "Content-Type: application/json" \
                                     -d "$BODY" \
-                                    | jq -r '.access_token'
+                                    | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))"
                             ''',
                             returnStdout: true
                         ).trim()
@@ -517,7 +514,14 @@ def deployInstance(String instanceId) {
             curl -s \\
                 -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
                 -H "X-Correlation-ID: \$CORRELATION_ID" \\
-                "\$DEPL_URL" | jq -r 'if type == "array" then .[0].id else .id end // empty' 2>/dev/null || true
+                "\$DEPL_URL" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    if isinstance(d, list): d = d[0] if d else {}
+    print(d.get('id', '') if isinstance(d, dict) else '')
+except: print('')
+" 2>/dev/null || true
         }
 
         DEPL_ID=\$(get_deploy_id)
@@ -699,7 +703,7 @@ def validateInstance(String instanceId, String label) {
     log('WARN', "${label}  did not confirm DEPLOYED within ${(int)(maxChecks * 10 / 60)} min — check Anypoint Runtime Manager; proceeding")
 }
 
-// Authenticated Anypoint API call using curl + jq (Linux-compatible).
+// Authenticated Anypoint API call using curl + python3 (Linux-compatible).
 // Token is never logged — masked by withCredentials in the Authenticate stage.
 def apiCall(String method, String url, String bodyFile) {
     def bodyArg = bodyFile ? "--data @\"${bodyFile}\"" : ''
