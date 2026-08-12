@@ -75,9 +75,12 @@ pipeline {
                         error 'anypoint.yaml not found in the config repo root. Create it from the setup guide.'
                     }
                     def acfg     = readYaml file: 'anypoint.yaml'
-                    def envBlock = acfg.anypoint?.environments?.get(params.ENVIRONMENT)
+                    def envs     = acfg.anypoint?.environments ?: [:]
+                    // Case-insensitive lookup so 'dev', 'DEV', 'Dev' all match
+                    def envKey   = envs.keySet().find { it.equalsIgnoreCase(params.ENVIRONMENT) }
+                    def envBlock = envKey ? envs[envKey] : null
                     if (!envBlock) {
-                        error "No anypoint config found for environment '${params.ENVIRONMENT}' in anypoint.yaml"
+                        error "No anypoint config found for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${envs.keySet().join(', ')})"
                     }
                     env.ORG_ID            = "${acfg.anypoint.organizationId}"
                     env.ENV_ID            = "${envBlock.environmentId}"
