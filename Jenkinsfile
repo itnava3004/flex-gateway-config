@@ -24,6 +24,12 @@
 pipeline {
     agent any
 
+    environment {
+        HTTPS_PROXY = 'http://proxy.infosec.fedex.com:443'
+        HTTP_PROXY  = 'http://proxy.infosec.fedex.com:443'
+        NO_PROXY    = 'localhost,127.0.0.1'
+    }
+
     parameters {
         choice(name: 'ENVIRONMENT',
                choices: ['dev', 'test', 'qa', 'preprod', 'prod','sandbox'],
