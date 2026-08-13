@@ -232,11 +232,25 @@ pipeline {
                             script: '''
                                 set -e
                                 BODY='{"grant_type":"client_credentials","client_id":"'"$CLIENT_ID"'","client_secret":"'"$CLIENT_SECRET"'"}'
-                                curl -s -X POST \
+                                TMP=$(mktemp)
+                                HTTP=$(curl -s -o "$TMP" -w "%{http_code}" -X POST \
                                     "$ANYPOINT_BASE_URL/accounts/api/v2/oauth2/token" \
                                     -H "Content-Type: application/json" \
-                                    -d "$BODY" \
-                                    | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))"
+                                    -d "$BODY")
+                                RESP=$(cat "$TMP"); rm -f "$TMP"
+                                if [ -z "$RESP" ]; then
+                                    echo "ERROR: curl returned empty response (HTTP $HTTP) — check network/proxy connectivity to $ANYPOINT_BASE_URL from this agent" >&2
+                                    exit 1
+                                fi
+                                echo "$RESP" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+t = d.get('access_token', '')
+if not t:
+    sys.stderr.write('ERROR: no access_token in response: ' + str(d) + '\n')
+    sys.exit(1)
+print(t)
+"
                             ''',
                             returnStdout: true
                         ).trim()
