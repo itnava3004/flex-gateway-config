@@ -24,12 +24,6 @@
 pipeline {
     agent any
 
-    environment {
-        HTTPS_PROXY = 'http://proxy.infosec.fedex.com:443'
-        HTTP_PROXY  = 'http://proxy.infosec.fedex.com:443'
-        NO_PROXY    = 'localhost,127.0.0.1'
-    }
-
     parameters {
         choice(name: 'ENVIRONMENT',
                choices: ['dev', 'test', 'qa', 'preprod', 'prod','sandbox'],
@@ -50,8 +44,10 @@ pipeline {
 
     environment {
         CORRELATION_ID        = "${env.BUILD_TAG}"
-        // MuleSoft's Exchange group ID — applies to all built-in managed policies
         MULESOFT_POLICY_GROUP = '68ef9520-24e9-4cf2-b2f5-620025690913'
+        HTTPS_PROXY           = 'http://proxy.infosec.fedex.com:443'
+        HTTP_PROXY            = 'http://proxy.infosec.fedex.com:443'
+        NO_PROXY              = 'localhost,127.0.0.1'
     }
 
     options {
