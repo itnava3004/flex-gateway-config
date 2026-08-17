@@ -194,7 +194,10 @@ pipeline {
                                 upstreamUri  : upstreamUri,
                                 proxyUri     : proxyUri,
                                 policies     : policies,
-                                wave         : wave
+                                wave         : wave,
+                                endpoints    : (apiCfg.endpoints ?: []).collect { ep ->
+                                    [name: "${ep.name}", uri: "${ep.uri}", publicPath: "${ep.publicPath ?: ''}"]
+                                }
                             ]
                         }
                         waveApiMap[wave] = apiList
@@ -312,7 +315,7 @@ pipeline {
                                 return
                             }
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                                deployInstance(instanceId)
+                                deployInstance(instanceId, api)
                                 if (!params.SKIP_POLICIES && api.policies) {
                                     applyPolicies(instanceId, api.policies, api.appName)
                                 }
@@ -506,14 +509,34 @@ def createInstance(Map api) {
 // so POST immediately returns 400 UniqueConstraintError). PATCH if id found; POST if not.
 // Port-conflict 400s (InvalidOperationError "already in use") fail immediately with a
 // clear actionable message — waiting won't help, it's a config problem.
-def deployInstance(String instanceId) {
-    def body = writeJSON(returnText: true, json: [
+def deployInstance(String instanceId, Map api) {
+    def deployJson = [
         type          : 'HY',
         gatewayVersion: env.GATEWAY_VERSION,
         targetId      : env.FLEX_TARGET_ID,
         targetName    : env.FLEX_TARGET_NAME,
         environmentId : env.ENV_ID
-    ])
+    ]
+
+    // Multi-endpoint routing: one API instance, one port, per-path upstreams.
+    // Each config.yaml endpoint becomes its own upstream + route rule.
+    def endpoints = (api?.endpoints ?: [])
+    if (endpoints.size() > 1) {
+        deployJson.overrides = [
+            upstreams: endpoints.collect { ep ->
+                [label: ep.name, uri: ep.uri, weight: 100]
+            },
+            routing: endpoints.collect { ep ->
+                [
+                    label    : ep.name,
+                    upstreams: [[weight: 100, label: ep.name]],
+                    rules    : [path: "${ep.publicPath}(.*)"]
+                ]
+            }
+        ]
+    }
+
+    def body = writeJSON(returnText: true, json: deployJson)
     def bodyFile = "deploy-${instanceId}.json"
     writeFile file: bodyFile, text: body
 
