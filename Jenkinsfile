@@ -518,27 +518,26 @@ def deployInstance(String instanceId, Map api) {
         environmentId : env.ENV_ID
     ]
 
-    // Multi-endpoint routing: one API instance, one port, per-path upstreams.
-    // Each config.yaml endpoint becomes its own upstream + route rule.
+    // Multi-endpoint routing: upstreams + routing are top-level fields in the
+    // proxies xAPI deployment body, not nested inside overrides.
     def endpoints = (api?.endpoints ?: [])
     if (endpoints.size() > 1) {
-        deployJson.overrides = [
-            upstreams: endpoints.collect { ep ->
-                [label: ep.name, uri: ep.uri, weight: 100]
-            },
-            routing: endpoints.collect { ep ->
-                [
-                    label    : ep.name,
-                    upstreams: [[weight: 100, label: ep.name]],
-                    rules    : [path: "${ep.publicPath}(.*)"]
-                ]
-            }
-        ]
+        deployJson.upstreams = endpoints.collect { ep ->
+            [label: ep.name, uri: ep.uri, weight: 100]
+        }
+        deployJson.routing = endpoints.collect { ep ->
+            [
+                label    : ep.name,
+                upstreams: [[weight: 100, label: ep.name]],
+                rules    : [path: "${ep.publicPath}(.*)"]
+            ]
+        }
     }
 
     def body = writeJSON(returnText: true, json: deployJson)
     def bodyFile = "deploy-${instanceId}.json"
     writeFile file: bodyFile, text: body
+    log('INFO', "Deployment body for ${instanceId}: ${body}")
 
     sh """
         set -e
@@ -571,6 +570,10 @@ except: print('')
                 -H "Content-Type: application/json" \\
                 --data "@${bodyFile}" > /dev/null
             echo "Deployment updated (id=\$DEPL_ID) for instance ${instanceId}"
+            echo "[DEBUG] Stored deployment (GET):"
+            curl -s "\$DEPL_URL/\$DEPL_ID" \\
+                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                -H "X-Correlation-ID: \$CORRELATION_ID"
         else
             TMP=\$(mktemp)
             HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" -X POST "\$DEPL_URL" \\
@@ -581,6 +584,13 @@ except: print('')
             BODY=\$(cat "\$TMP"); rm -f "\$TMP"
             if [ "\$HTTP" = "200" ] || [ "\$HTTP" = "201" ]; then
                 echo "Deployment created for instance ${instanceId}"
+                NEW_ID=\$(echo "\$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+                if [ -n "\$NEW_ID" ]; then
+                    echo "[DEBUG] Stored deployment (GET):"
+                    curl -s "\$DEPL_URL/\$NEW_ID" \\
+                        -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
+                        -H "X-Correlation-ID: \$CORRELATION_ID"
+                fi
             elif [ "\$HTTP" = "400" ]; then
                 if echo "\$BODY" | grep -q 'already in use\\|InvalidOperationError'; then
                     echo "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$BODY\\nFix: assign a different proxyUri in envs/${params.ENVIRONMENT}/overlay.yaml, or undeploy the conflicting API first." >&2
