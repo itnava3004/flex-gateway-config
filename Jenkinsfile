@@ -410,18 +410,18 @@ def updateInstance(String instanceId, Map api) {
     ]
     def endpoints = (api?.endpoints ?: [])
     if (endpoints.size() > 1) {
-        updateJson.upstreams = endpoints.collect { ep -> [label: ep.name, uri: ep.uri, weight: 100] }
-        updateJson.routing   = endpoints.collect { ep ->
-            [label: ep.name, upstreams: [[label: ep.name, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+        updateJson.routing = endpoints.collect { ep ->
+            [upstreams: [[uri: ep.uri, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
         }
     }
     def body = writeJSON(returnText: true, json: updateJson)
+    log('INFO', "updateInstance body for ${api.appName}: ${body}")
     writeFile file: "update-${api.appName}.json", text: body
     try {
-        apiCall('PATCH',
+        def resp = apiCall('PATCH',
             "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}",
             "update-${api.appName}.json")
-        log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}")
+        log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}. Response: ${resp.take(500)}")
     } catch (err) {
         log('WARN', "Could not update instance ${instanceId} endpoint: ${err.message}")
     }
@@ -505,16 +505,19 @@ def createInstance(Map api) {
     ]
     def endpoints = (api?.endpoints ?: [])
     if (endpoints.size() > 1) {
-        createJson.upstreams = endpoints.collect { ep -> [label: ep.name, uri: ep.uri, weight: 100] }
-        createJson.routing   = endpoints.collect { ep ->
-            [label: ep.name, upstreams: [[label: ep.name, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+        // Inline URI inside each upstream — Anypoint assigns UUIDs and links them in routing.
+        // No separate top-level upstreams array; label-based references are not accepted.
+        createJson.routing = endpoints.collect { ep ->
+            [upstreams: [[uri: ep.uri, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
         }
     }
     def body = writeJSON(returnText: true, json: createJson)
+    log('INFO', "createInstance body for ${api.appName}: ${body}")
     writeFile file: "create-${api.appName}.json", text: body
     def response = apiCall('POST',
         "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis",
         "create-${api.appName}.json")
+    log('INFO', "createInstance response for ${api.appName}: ${response}")
     def json = readJSON text: response
     if (!json.id) { error "createInstance returned no id for ${api.appName}. Response: ${response}" }
     return "${json.id}"
