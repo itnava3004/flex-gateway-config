@@ -405,9 +405,17 @@ def findExistingInstance(String assetId, String label) {
 // Patch an existing API instance's endpoint so proxyUri and upstreamUri
 // stay in sync with the config repo on every pipeline run.
 def updateInstance(String instanceId, Map api) {
-    def body = writeJSON(returnText: true, json: [
+    def updateJson = [
         endpoint: [deploymentType: 'HY', uri: api.upstreamUri, proxyUri: api.proxyUri, isCloudHub: null]
-    ])
+    ]
+    def endpoints = (api?.endpoints ?: [])
+    if (endpoints.size() > 1) {
+        updateJson.upstreams = endpoints.collect { ep -> [label: ep.name, uri: ep.uri, weight: 100] }
+        updateJson.routing   = endpoints.collect { ep ->
+            [label: ep.name, upstreams: [[label: ep.name, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+        }
+    }
+    def body = writeJSON(returnText: true, json: updateJson)
     writeFile file: "update-${api.appName}.json", text: body
     try {
         apiCall('PATCH',
@@ -489,12 +497,20 @@ def ensureExchangeAsset(Map api) {
 
 // Create a new API instance in API Manager. Returns the new instance id.
 def createInstance(Map api) {
-    def body = writeJSON(returnText: true, json: [
+    def createJson = [
         spec         : [groupId: env.ORG_ID, assetId: api.assetId, version: api.assetVersion],
         endpoint     : [deploymentType: 'HY', uri: api.upstreamUri, proxyUri: api.proxyUri, isCloudHub: null],
         technology   : 'flexGateway',
         instanceLabel: api.instanceLabel
-    ])
+    ]
+    def endpoints = (api?.endpoints ?: [])
+    if (endpoints.size() > 1) {
+        createJson.upstreams = endpoints.collect { ep -> [label: ep.name, uri: ep.uri, weight: 100] }
+        createJson.routing   = endpoints.collect { ep ->
+            [label: ep.name, upstreams: [[label: ep.name, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+        }
+    }
+    def body = writeJSON(returnText: true, json: createJson)
     writeFile file: "create-${api.appName}.json", text: body
     def response = apiCall('POST',
         "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis",
@@ -518,22 +534,8 @@ def deployInstance(String instanceId, Map api) {
         environmentId : env.ENV_ID
     ]
 
-    // Multi-endpoint routing: upstreams + routing are top-level fields in the
-    // proxies xAPI deployment body, not nested inside overrides.
-    def endpoints = (api?.endpoints ?: [])
-    if (endpoints.size() > 1) {
-        deployJson.upstreams = endpoints.collect { ep ->
-            [label: ep.name, uri: ep.uri, weight: 100]
-        }
-        deployJson.routing = endpoints.collect { ep ->
-            [
-                label    : ep.name,
-                upstreams: [[weight: 100, label: ep.name]],
-                rules    : [path: "${ep.publicPath}(.*)"]
-            ]
-        }
-    }
-
+    // NOTE: routing is managed via the API Manager API (createInstance/updateInstance),
+    // not the proxies xAPI deployment body — Anypoint ignores routing fields here for HY type.
     def body = writeJSON(returnText: true, json: deployJson)
     def bodyFile = "deploy-${instanceId}.json"
     writeFile file: bodyFile, text: body
