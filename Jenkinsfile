@@ -291,6 +291,7 @@ pipeline {
                                     instanceId = createInstance(api)
                                     log('INFO', "Created new instance id=${instanceId} for label=${api.instanceLabel}")
                                 }
+                                configureRouting(instanceId, api)
                                 API_INSTANCES[api.instanceLabel] = instanceId
                             }
                         }
@@ -408,14 +409,8 @@ def updateInstance(String instanceId, Map api) {
     def updateJson = [
         endpoint: [deploymentType: 'HY', uri: api.upstreamUri, proxyUri: api.proxyUri, isCloudHub: null]
     ]
-    def endpoints = (api?.endpoints ?: [])
-    if (endpoints.size() > 1) {
-        updateJson.routing = endpoints.collect { ep ->
-            [upstreams: [[uri: ep.uri, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
-        }
-    }
+    // Routing is handled separately by configureRouting() — see note in createInstance().
     def body = writeJSON(returnText: true, json: updateJson)
-    log('INFO', "updateInstance body for ${api.appName}: ${body}")
     writeFile file: "update-${api.appName}.json", text: body
     try {
         def resp = apiCall('PATCH',
@@ -424,6 +419,70 @@ def updateInstance(String instanceId, Map api) {
         log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}. Response: ${resp.take(500)}")
     } catch (err) {
         log('WARN', "Could not update instance ${instanceId} endpoint: ${err.message}")
+    }
+}
+
+// Configure path-based routing for APIs with multiple endpoints (Option B:
+// one instance, one port, per-path upstreams).
+//
+// Anypoint drops `routing` when supplied in the create/update body — upstreams are
+// separate resources with server-assigned UUIDs, and routing entries must reference
+// those ids. So: create the upstreams first, then PATCH routing with their ids.
+def configureRouting(String instanceId, Map api) {
+    def endpoints = (api?.endpoints ?: [])
+    if (endpoints.size() < 2) { return }
+
+    def base = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}"
+    def uriToId = [:]
+
+    // ── Existing upstreams (idempotent re-runs) ──
+    try {
+        def existing = apiCall('GET', "${base}/upstreams", null)
+        log('INFO', "GET upstreams for ${api.appName}: ${existing.take(1000)}")
+        def parsed = readJSON text: existing
+        def list   = (parsed instanceof List) ? parsed : (parsed?.upstreams ?: [])
+        list.each { u -> if (u?.uri && u?.id) { uriToId["${u.uri}"] = "${u.id}" } }
+    } catch (err) {
+        log('WARN', "Could not GET upstreams for ${api.appName}: ${err.message}")
+    }
+
+    // ── Create any upstream that doesn't exist yet ──
+    endpoints.each { ep ->
+        if (uriToId["${ep.uri}"]) { return }
+        def upFile = "upstream-${api.appName}-${ep.name}.json"
+        writeFile file: upFile, text: writeJSON(returnText: true, json: [label: ep.name, uri: ep.uri])
+        try {
+            def resp = apiCall('POST', "${base}/upstreams", upFile)
+            log('INFO', "POST upstream '${ep.name}' for ${api.appName}: ${resp.take(500)}")
+            def created = readJSON text: resp
+            if (created?.id) { uriToId["${ep.uri}"] = "${created.id}" }
+        } catch (err) {
+            log('WARN', "Could not create upstream '${ep.name}' for ${api.appName}: ${err.message}")
+        }
+    }
+
+    // ── PATCH routing, referencing upstreams by their server-assigned ids ──
+    def routes = endpoints.findAll { uriToId["${it.uri}"] }.collect { ep ->
+        [upstreams: [[id: uriToId["${ep.uri}"], weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+    }
+    if (routes.size() < endpoints.size()) {
+        log('WARN', "Only ${routes.size()}/${endpoints.size()} upstreams resolved for ${api.appName} — routing will be incomplete")
+    }
+    if (!routes) {
+        log('WARN', "No upstreams resolved for ${api.appName} — skipping routing PATCH")
+        return
+    }
+
+    def routeFile = "routing-${api.appName}.json"
+    def routeBody = writeJSON(returnText: true, json: [routing: routes])
+    log('INFO', "PATCH routing body for ${api.appName}: ${routeBody}")
+    writeFile file: routeFile, text: routeBody
+    try {
+        def resp = apiCall('PATCH', base, routeFile)
+        log('INFO', "PATCH routing response for ${api.appName}: ${resp.take(1000)}")
+        log('INFO', "Configured ${routes.size()} routes for ${api.appName}: ${endpoints.collect { it.publicPath }.join(', ')}")
+    } catch (err) {
+        log('WARN', "Could not PATCH routing for ${api.appName}: ${err.message}")
     }
 }
 
@@ -503,16 +562,9 @@ def createInstance(Map api) {
         technology   : 'flexGateway',
         instanceLabel: api.instanceLabel
     ]
-    def endpoints = (api?.endpoints ?: [])
-    if (endpoints.size() > 1) {
-        // Inline URI inside each upstream — Anypoint assigns UUIDs and links them in routing.
-        // No separate top-level upstreams array; label-based references are not accepted.
-        createJson.routing = endpoints.collect { ep ->
-            [upstreams: [[uri: ep.uri, weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
-        }
-    }
+    // NOTE: routing is NOT accepted in the create body — Anypoint silently drops it.
+    // Upstreams are separate resources with server-assigned UUIDs; see configureRouting().
     def body = writeJSON(returnText: true, json: createJson)
-    log('INFO', "createInstance body for ${api.appName}: ${body}")
     writeFile file: "create-${api.appName}.json", text: body
     def response = apiCall('POST',
         "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis",
