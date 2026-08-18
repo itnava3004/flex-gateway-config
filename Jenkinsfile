@@ -462,8 +462,14 @@ def configureRouting(String instanceId, Map api) {
     }
 
     // ── PATCH routing, referencing upstreams by their server-assigned ids ──
+    // label comes from the endpoint's `name` in config.yaml so routes are
+    // identifiable in the Anypoint UI rather than showing as unnamed.
     def routes = endpoints.findAll { uriToId["${it.uri}"] }.collect { ep ->
-        [upstreams: [[id: uriToId["${ep.uri}"], weight: 100]], rules: [path: "${ep.publicPath}(.*)"]]
+        [
+            label    : "${ep.name}",
+            upstreams: [[id: uriToId["${ep.uri}"], weight: 100]],
+            rules    : [path: "${ep.publicPath}(.*)"]
+        ]
     }
     if (routes.size() < endpoints.size()) {
         log('WARN', "Only ${routes.size()}/${endpoints.size()} upstreams resolved for ${api.appName} — routing will be incomplete")
