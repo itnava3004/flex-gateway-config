@@ -1,0 +1,18 @@
+# Runtime configuration for orders-api in prod.
+# Self-contained: every environment-specific value for this API lives here,
+# so apis/orders-api/config.yaml is promoted unchanged across environments.
+app: orders-api
+env: prod
+
+publicHostname: flex.fxf.example.com
+tlsCertName: fxf-prod-wildcard
+
+proxyUri: http://0.0.0.0:8082
+
+# Backend URI per endpoint. Keys must match the endpoint names in
+# apis/orders-api/config.yaml.
+endpoints:
+  orders-cancel: https://l7-gw.fxf.internal/orders/cancel
+  orders-create: https://l7-gw.fxf.internal/orders/create
+  orders-list:   https://l7-gw.fxf.internal/orders/list
+  orders-track:  https://l7-gw.fxf.internal/orders/track

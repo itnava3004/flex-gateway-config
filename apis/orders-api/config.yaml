@@ -1,21 +1,20 @@
+# Environment-independent contract for this API.
+# Backend URIs and proxy ports are per-environment and live in
+# envs/<app>/<env>/runtime.yaml.
 app: orders-api
 assetId: orders-api
 version: 1.0.0
 endpoints:
   - name: orders-cancel
-    uri: https://l7-gw.fxf.internal/orders/cancel
     publicPath: /orders/v1/cancel
     authPattern: client-id-enforcement
   - name: orders-create
-    uri: https://l7-gw.fxf.internal/orders/create
     publicPath: /orders/v1/create
     authPattern: client-id-enforcement
   - name: orders-list
-    uri: https://l7-gw.fxf.internal/orders/list
     publicPath: /orders/v1/list
     authPattern: client-id-enforcement
   - name: orders-track
-    uri: https://l7-gw.fxf.internal/orders/track
     publicPath: /orders/v1/track
     authPattern: client-id-enforcement
 policies:

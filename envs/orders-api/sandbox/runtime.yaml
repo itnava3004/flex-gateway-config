@@ -1,0 +1,21 @@
+# Runtime configuration for orders-api in sandbox.
+# Self-contained: every environment-specific value for this API lives here,
+# so apis/orders-api/config.yaml is promoted unchanged across environments.
+app: orders-api
+env: sandbox
+
+publicHostname: demo-1-mq4lco.5sc6y6-1.usa-e2.cloudhub.io
+tlsCertName: fxf-dev-wildcard
+
+# NOTE: the demo-1 Flex Gateway only exposes ports 8081 and 8082, so
+# payments-api and orders-api share 8082. Add a 0.0.0.0:8083 listener in
+# Runtime Manager to run all three APIs at once.
+proxyUri: http://0.0.0.0:8082
+
+# Backend URI per endpoint. Keys must match the endpoint names in
+# apis/orders-api/config.yaml.
+endpoints:
+  orders-cancel: https://l7-gw.fxf.internal/orders/cancel
+  orders-create: https://l7-gw.fxf.internal/orders/create
+  orders-list:   https://l7-gw.fxf.internal/orders/list
+  orders-track:  https://l7-gw.fxf.internal/orders/track

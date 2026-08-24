@@ -6,7 +6,7 @@
 //   1. Checkout flex-gateway-config repo (or the repo this Jenkinsfile lives in)
 //   2. Read anypoint.yaml → resolve orgId, envId, flexTarget for chosen ENVIRONMENT
 //   3. Read waves/<WAVE>/manifest.yaml → list of apps to deploy
-//   4. For each app: read apis/<app>/config.yaml + envs/<env>/overlay.yaml
+//   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
 //   5. Authenticate via Connected App (client_credentials)
 //   6. Deploy each wave in order:
 //        find-or-create instance → deploy → apply policies → validate
@@ -144,35 +144,56 @@ pipeline {
                             log('INFO', "Wave ${wave}: filtered to [${apps.join(', ')}]")
                         }
 
-                        // Eagerly flatten overlay apps into a plain Groovy Map so that
-                        // hyphenated keys (e.g. customer-api) are safe to look up inside
-                        // closures under Jenkins CPS serialisation.
-                        def overlayApps = [:]
-                        def overlayPath = "envs/${params.ENVIRONMENT}/overlay.yaml"
-                        if (fileExists(overlayPath)) {
-                            def rawOverlay = readYaml file: overlayPath
-                            rawOverlay?.apps?.each { k, v -> overlayApps["${k}"] = v }
-                        }
-                        if (overlayApps) {
-                            log('INFO', "Overlay apps found: ${overlayApps.keySet().join(', ')}")
-                        } else {
-                            log('WARN', "No overlay apps found for ${params.ENVIRONMENT} — proxy ports will default to 8080")
-                        }
-
                         def apiList = []
                         apps.each { appName ->
                             def cfgPath = "apis/${appName}/config.yaml"
                             if (!fileExists(cfgPath)) {
                                 error "API config not found: ${cfgPath}"
                             }
-                            def apiCfg     = readYaml file: cfgPath
-                            def appOverlay = overlayApps[appName] ?: [:]
+                            def apiCfg = readYaml file: cfgPath
 
-                            // upstreamUri: env overlay wins, then first endpoint's backend URI
-                            def upstreamUri = "${appOverlay.upstreamUri ?: apiCfg.endpoints[0].uri}"
-                            // proxyUri: env overlay wins, then a sane default on port 8080
-                            def proxyUri    = "${appOverlay.proxyUri    ?: 'http://0.0.0.0:8080'}"
-                            log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}")
+                            // Per-app, per-environment runtime config: backend URIs, proxy
+                            // port and gateway hostname. Try the environment name as given,
+                            // then lower/upper case, so 'dev' and 'DEV' both resolve on a
+                            // case-sensitive agent filesystem.
+                            def rtPath = ["envs/${appName}/${params.ENVIRONMENT}/runtime.yaml",
+                                          "envs/${appName}/${params.ENVIRONMENT.toLowerCase()}/runtime.yaml",
+                                          "envs/${appName}/${params.ENVIRONMENT.toUpperCase()}/runtime.yaml"]
+                                         .find { fileExists(it) }
+                            if (!rtPath) {
+                                error "Runtime config not found for ${appName} in '${params.ENVIRONMENT}' — expected envs/${appName}/${params.ENVIRONMENT}/runtime.yaml"
+                            }
+                            def runtime = readYaml file: rtPath
+
+                            // Flatten the endpoint→URI map into a plain Groovy Map so that
+                            // hyphenated keys (e.g. customer-address) are safe to look up
+                            // inside closures under Jenkins CPS serialisation.
+                            def epUris = [:]
+                            runtime.endpoints?.each { k, v -> epUris["${k}"] = "${v}" }
+
+                            // Join the env-independent contract (config.yaml) with the
+                            // per-env backend URIs (runtime.yaml), keyed on endpoint name.
+                            def endpoints = (apiCfg.endpoints ?: []).collect { ep ->
+                                def epName = "${ep.name}"
+                                def uri    = epUris[epName]
+                                if (!uri) {
+                                    error "No URI for endpoint '${epName}' of ${appName} in ${rtPath} — add it under endpoints:"
+                                }
+                                [name: epName, uri: uri, publicPath: "${ep.publicPath ?: ''}"]
+                            }
+                            if (!endpoints) {
+                                error "No endpoints declared in ${cfgPath}"
+                            }
+                            def orphans = epUris.keySet() - endpoints.collect { it.name }
+                            if (orphans) {
+                                log('WARN', "${appName}: ${rtPath} defines URIs for unknown endpoints ${orphans.join(', ')} — not present in ${cfgPath}")
+                            }
+
+                            // upstreamUri: explicit override in runtime.yaml, else first endpoint
+                            def upstreamUri = "${runtime.upstreamUri ?: endpoints[0].uri}"
+                            // proxyUri: from runtime.yaml, else a sane default on port 8080
+                            def proxyUri    = "${runtime.proxyUri ?: 'http://0.0.0.0:8080'}"
+                            log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
 
                             def apiPolicies = (apiCfg.policies ?: []).collect { p ->
                                 [
@@ -191,13 +212,12 @@ pipeline {
                                 assetId      : "${apiCfg.assetId}",
                                 assetVersion : "${apiCfg.version}",
                                 instanceLabel: "${appName}-${params.ENVIRONMENT}",
-                                upstreamUri  : upstreamUri,
-                                proxyUri     : proxyUri,
-                                policies     : policies,
-                                wave         : wave,
-                                endpoints    : (apiCfg.endpoints ?: []).collect { ep ->
-                                    [name: "${ep.name}", uri: "${ep.uri}", publicPath: "${ep.publicPath ?: ''}"]
-                                }
+                                upstreamUri   : upstreamUri,
+                                proxyUri      : proxyUri,
+                                publicHostname: "${runtime.publicHostname ?: 'localhost'}",
+                                policies      : policies,
+                                wave          : wave,
+                                endpoints     : endpoints
                             ]
                         }
                         waveApiMap[wave] = apiList
@@ -656,7 +676,7 @@ except: print('')
                 fi
             elif [ "\$HTTP" = "400" ]; then
                 if echo "\$BODY" | grep -q 'already in use\\|InvalidOperationError'; then
-                    echo "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$BODY\\nFix: assign a different proxyUri in envs/${params.ENVIRONMENT}/overlay.yaml, or undeploy the conflicting API first." >&2
+                    echo "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$BODY\\nFix: assign a different proxyUri in envs/${api.appName}/${params.ENVIRONMENT}/runtime.yaml, or undeploy the conflicting API first." >&2
                     exit 1
                 fi
                 sleep 10
@@ -837,7 +857,8 @@ def apiCall(String method, String url, String bodyFile) {
 }
 
 // Build a Postman Collection v2.1 JSON for each successfully deployed API.
-// Reads publicPath from apis/<app>/config.yaml and publicHostname from the env overlay.
+// Uses the endpoints joined during Load Config and the publicHostname carried
+// through from envs/<app>/<env>/runtime.yaml.
 // Returns the output filename (for archiveArtifacts), or null if nothing to write.
 def generatePostmanCollection() {
     def deployedResults = (ALL_RESULTS ?: []).findAll { it.status == 'OK' }
@@ -846,13 +867,15 @@ def generatePostmanCollection() {
         return null
     }
 
-    // Public hostname from overlay defaults (falls back to localhost)
-    def gatewayHost = 'localhost'
-    def overlayPath = "envs/${params.ENVIRONMENT}/overlay.yaml"
-    if (fileExists(overlayPath)) {
-        def ov = readYaml file: overlayPath
-        gatewayHost = "${ov.defaults?.publicHostname ?: 'localhost'}"
+    // Public hostname comes from the deployed APIs' runtime.yaml (same value for
+    // every app in a given environment), already loaded during Load Config.
+    def firstApi = null
+    deployedResults.each { r ->
+        if (firstApi == null) {
+            firstApi = (WAVE_API_MAP[r.wave] ?: []).find { it.instanceLabel == r.label }
+        }
     }
+    def gatewayHost = "${firstApi?.publicHostname ?: 'localhost'}"
 
     def folders = []
 
@@ -863,9 +886,9 @@ def generatePostmanCollection() {
         // Extract port from proxyUri: http://0.0.0.0:8082 → 8082
         def proxyPort = api.proxyUri.tokenize(':').last().replaceAll('[^0-9]', '') ?: '8080'
 
-        // Re-read config.yaml to get the endpoint publicPaths
-        def apiCfg    = readYaml file: "apis/${api.appName}/config.yaml"
-        def endpoints = apiCfg.endpoints ?: []
+        // Endpoints were already joined (config.yaml publicPath + runtime.yaml uri)
+        // during Load Config — reuse them rather than re-reading the config.
+        def endpoints = api.endpoints ?: []
 
         // Headers driven by applied policies
         def headers = [[key: 'Content-Type', value: 'application/json', type: 'text']]

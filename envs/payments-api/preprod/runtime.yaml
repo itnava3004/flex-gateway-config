@@ -1,0 +1,17 @@
+# Runtime configuration for payments-api in preprod.
+# Self-contained: every environment-specific value for this API lives here,
+# so apis/payments-api/config.yaml is promoted unchanged across environments.
+app: payments-api
+env: preprod
+
+publicHostname: preprod-flex.fxf.example.com
+tlsCertName: fxf-preprod-wildcard
+
+proxyUri: http://0.0.0.0:8081
+
+# Backend URI per endpoint. Keys must match the endpoint names in
+# apis/payments-api/config.yaml.
+endpoints:
+  payments-charge: https://l7-gw.fxf.internal/payments/charge
+  payments-refund: https://l7-gw.fxf.internal/payments/refund
+  payments-status: https://l7-gw.fxf.internal/payments/status

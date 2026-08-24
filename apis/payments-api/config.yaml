@@ -1,17 +1,17 @@
+# Environment-independent contract for this API.
+# Backend URIs and proxy ports are per-environment and live in
+# envs/<app>/<env>/runtime.yaml.
 app: payments-api
 assetId: payments-api
 version: 2.0.0
 endpoints:
   - name: payments-charge
-    uri: https://l7-gw.fxf.internal/payments/charge
     publicPath: /payments/v1/charge
     authPattern: client-id-enforcement
   - name: payments-refund
-    uri: https://l7-gw.fxf.internal/payments/refund
     publicPath: /payments/v1/refund
     authPattern: client-id-enforcement
   - name: payments-status
-    uri: https://l7-gw.fxf.internal/payments/status
     publicPath: /payments/v1/status
     authPattern: client-id-enforcement
 policies:

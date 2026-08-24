@@ -1,17 +1,17 @@
+# Environment-independent contract for this API.
+# Backend URIs and proxy ports are per-environment and live in
+# envs/<app>/<env>/runtime.yaml.
 app: customer-api
 assetId: customer-api
 version: 1.0.0
 endpoints:
   - name: customer-address
-    uri: https://l7-gw.fxf.internal/customer/address
     publicPath: /customer/v1/address
     authPattern: client-id-enforcement
   - name: customer-consent
-    uri: https://l7-gw.fxf.internal/customer/consent
     publicPath: /customer/v1/consent
     authPattern: client-id-enforcement
   - name: customer-profile
-    uri: https://l7-gw.fxf.internal/customer/profile
     publicPath: /customer/v1/profile
     authPattern: client-id-enforcement
 policies:

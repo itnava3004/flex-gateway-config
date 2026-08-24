@@ -1,6 +1,6 @@
 # EAI-3541669 — Flex Gateway Configuration
 
-This repository contains all **MuleSoft Anypoint Flex Gateway** API configurations, policies, environment overlays, and deployment automation for project **EAI-3541669**.
+This repository contains all **MuleSoft Anypoint Flex Gateway** API configurations, policies, per-environment runtime config, and deployment automation for project **EAI-3541669**.
 
 ---
 
@@ -8,16 +8,20 @@ This repository contains all **MuleSoft Anypoint Flex Gateway** API configuratio
 
 ```
 eai-3541669-flex-gateway-config/
-├── apis/                          # One folder per API
+├── apis/                          # One folder per API (env-independent contract)
 │   ├── customer-api/config.yaml
 │   ├── payments-api/config.yaml
 │   └── orders-api/config.yaml
-├── envs/                          # Environment-specific property overlays
-│   ├── dev/overlay.yaml
-│   ├── test/overlay.yaml
-│   ├── qa/overlay.yaml
-│   ├── preprod/overlay.yaml
-│   └── prod/overlay.yaml
+├── envs/                          # Per-API, per-environment runtime config
+│   ├── customer-api/
+│   │   ├── dev/runtime.yaml
+│   │   ├── test/runtime.yaml
+│   │   ├── qa/runtime.yaml
+│   │   ├── sandbox/runtime.yaml
+│   │   ├── preprod/runtime.yaml
+│   │   └── prod/runtime.yaml
+│   ├── orders-api/<env>/runtime.yaml
+│   └── payments-api/<env>/runtime.yaml
 ├── policies/                      # Reusable Flex Gateway policy definitions
 │   ├── client-id-enforcement.yaml
 │   ├── rate-limiting-sla.yaml
@@ -89,7 +93,9 @@ Full details in [`inventory/api-inventory.yaml`](inventory/api-inventory.yaml).
 
 ## Environment Configuration
 
-Each environment has an overlay file under `envs/<env>/overlay.yaml`. These override gateway hosts, upstream addresses, rate limit thresholds, and TLS context references.
+Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`. It is self-contained and holds every environment-specific value for that API: the gateway `publicHostname` and `tlsCertName`, the `proxyUri` (listener port), and the backend `uri` for each endpoint.
+
+`apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
 
 **Never hardcode credentials.** All secrets must be referenced via Anypoint Secrets Manager:
 ```yaml

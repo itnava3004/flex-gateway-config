@@ -1,0 +1,17 @@
+# Runtime configuration for customer-api in prod.
+# Self-contained: every environment-specific value for this API lives here,
+# so apis/customer-api/config.yaml is promoted unchanged across environments.
+app: customer-api
+env: prod
+
+publicHostname: flex.fxf.example.com
+tlsCertName: fxf-prod-wildcard
+
+proxyUri: http://0.0.0.0:8083
+
+# Backend URI per endpoint. Keys must match the endpoint names in
+# apis/customer-api/config.yaml.
+endpoints:
+  customer-address: https://l7-gw.fxf.internal/customer/address
+  customer-consent: https://l7-gw.fxf.internal/customer/consent
+  customer-profile: https://l7-gw.fxf.internal/customer/profile
