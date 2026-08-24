@@ -212,12 +212,11 @@ pipeline {
                                 assetId      : "${apiCfg.assetId}",
                                 assetVersion : "${apiCfg.version}",
                                 instanceLabel: "${appName}-${params.ENVIRONMENT}",
-                                upstreamUri   : upstreamUri,
-                                proxyUri      : proxyUri,
-                                publicHostname: "${runtime.publicHostname ?: 'localhost'}",
-                                policies      : policies,
-                                wave          : wave,
-                                endpoints     : endpoints
+                                upstreamUri  : upstreamUri,
+                                proxyUri     : proxyUri,
+                                policies     : policies,
+                                wave         : wave,
+                                endpoints    : endpoints
                             ]
                         }
                         waveApiMap[wave] = apiList
@@ -362,39 +361,7 @@ pipeline {
                     echo '═════════════════════════════════════════════════════════════'
                     def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
                     if (failed) {
-                        // catchError marks this stage red and build FAILURE but lets
-                        // the Postman Collection stage run afterwards.
-                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                            error "${failed.size()} of ${(ALL_RESULTS ?: []).size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
-                        }
-                    }
-                }
-            }
-        }
-
-        // ──────────────────────────────────────────────────────────────────── //
-        stage('Postman Collection') {
-            when {
-                expression {
-                    !params.DRY_RUN && (ALL_RESULTS ?: []).any { it.status == 'OK' }
-                }
-            }
-            steps {
-                script {
-                    try {
-                        timeout(time: 5, unit: 'MINUTES') {
-                            input(
-                                message: 'Generate Postman collection for local API testing?',
-                                ok: 'Generate Postman Collection'
-                            )
-                        }
-                        def outFile = generatePostmanCollection()
-                        if (outFile) {
-                            archiveArtifacts artifacts: outFile, allowEmptyArchive: false
-                            log('INFO', 'Postman collection archived — download from Build Artifacts')
-                        }
-                    } catch (err) {
-                        log('INFO', 'Postman collection skipped')
+                        error "${failed.size()} of ${(ALL_RESULTS ?: []).size()} deployment(s) failed: ${failed.collect { it.label }.join(', ')}"
                     }
                 }
             }
@@ -854,92 +821,6 @@ def apiCall(String method, String url, String bodyFile) {
         returnStdout: true
     ).trim()
     return raw
-}
-
-// Build a Postman Collection v2.1 JSON for each successfully deployed API.
-// Uses the endpoints joined during Load Config and the publicHostname carried
-// through from envs/<app>/<env>/runtime.yaml.
-// Returns the output filename (for archiveArtifacts), or null if nothing to write.
-def generatePostmanCollection() {
-    def deployedResults = (ALL_RESULTS ?: []).findAll { it.status == 'OK' }
-    if (!deployedResults) {
-        log('WARN', 'No successfully deployed APIs — skipping Postman collection')
-        return null
-    }
-
-    // Public hostname comes from the deployed APIs' runtime.yaml (same value for
-    // every app in a given environment), already loaded during Load Config.
-    def firstApi = null
-    deployedResults.each { r ->
-        if (firstApi == null) {
-            firstApi = (WAVE_API_MAP[r.wave] ?: []).find { it.instanceLabel == r.label }
-        }
-    }
-    def gatewayHost = "${firstApi?.publicHostname ?: 'localhost'}"
-
-    def folders = []
-
-    deployedResults.each { result ->
-        def api = (WAVE_API_MAP[result.wave] ?: []).find { it.instanceLabel == result.label }
-        if (!api) return
-
-        // Extract port from proxyUri: http://0.0.0.0:8082 → 8082
-        def proxyPort = api.proxyUri.tokenize(':').last().replaceAll('[^0-9]', '') ?: '8080'
-
-        // Endpoints were already joined (config.yaml publicPath + runtime.yaml uri)
-        // during Load Config — reuse them rather than re-reading the config.
-        def endpoints = api.endpoints ?: []
-
-        // Headers driven by applied policies
-        def headers = [[key: 'Content-Type', value: 'application/json', type: 'text']]
-        if (api.policies?.any { it.assetId == 'client-id-enforcement' }) {
-            headers << [key: 'client_id',    value: '{{client_id}}',    type: 'text']
-            headers << [key: 'client_secret', value: '{{client_secret}}', type: 'text']
-        }
-
-        def requests = endpoints.collect { ep ->
-            def rawPath  = (ep.publicPath ?: '/').replaceAll('^/', '')
-            def segments = rawPath ? rawPath.split('/').toList() : []
-            [
-                name    : "${ep.name ?: api.appName}",
-                request : [
-                    method : 'GET',
-                    header : headers,
-                    url    : [
-                        raw     : "http://{{gateway_host}}:${proxyPort}/${rawPath}",
-                        protocol: 'http',
-                        host    : ['{{gateway_host}}'],
-                        port    : "${proxyPort}",
-                        path    : segments
-                    ]
-                ],
-                response: []
-            ]
-        }
-
-        folders << [
-            name: "${api.appName}  [${result.wave}]",
-            item: requests
-        ]
-    }
-
-    def collection = [
-        info    : [
-            name  : "Flex GW — ${params.ENVIRONMENT} / ${params.WAVE}",
-            schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
-        ],
-        variable: [
-            [key: 'gateway_host',  value: "${gatewayHost}",       type: 'string'],
-            [key: 'client_id',     value: 'YOUR_CLIENT_ID',       type: 'string'],
-            [key: 'client_secret', value: 'YOUR_CLIENT_SECRET',   type: 'string']
-        ],
-        item    : folders
-    ]
-
-    def outFile = "postman-collection-${params.ENVIRONMENT}-${params.WAVE}-${env.BUILD_NUMBER}.json"
-    writeJSON file: outFile, json: collection, pretty: 4
-    log('INFO', "Postman collection written → ${outFile}")
-    return outFile
 }
 
 // JSON-structured, correlation-aware log line.
