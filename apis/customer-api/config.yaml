@@ -3,8 +3,6 @@
 # envs/<app>/<env>/runtime.yaml.
 app: customer-api
 assetId: customer-api
-# Display name shown in Anypoint Exchange (assetId stays the identifier)
-exchangeAssetName: Customer API
 version: 1.0.0
 endpoints:
   - name: customer-address

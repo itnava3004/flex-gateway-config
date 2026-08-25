@@ -220,11 +220,9 @@ pipeline {
                             def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
 
                             apiList << [
-                                appName          : "${appName}",
-                                assetId          : "${apiCfg.assetId}",
-                                assetVersion     : "${apiCfg.version}",
-                                // Exchange display name; folder name if not declared
-                                exchangeAssetName: "${apiCfg.exchangeAssetName ?: appName}",
+                                appName      : "${appName}",
+                                assetId      : "${apiCfg.assetId}",
+                                assetVersion : "${apiCfg.version}",
                                 instanceLabel: "${appName}-${params.ENVIRONMENT}",
                                 upstreamUri  : upstreamUri,
                                 proxyUri     : proxyUri,
@@ -561,9 +559,7 @@ def ensureExchangeAsset(Map api) {
     def assetId    = api.assetId
     def version    = api.assetVersion
     def apiVersion = "v${version.tokenize('.')[0]}"
-    // Exchange display name: exchangeAssetName from config.yaml, falling back to
-    // the folder name so configs predating that field keep their current name.
-    def name       = api.exchangeAssetName
+    def name       = api.appName
     def checkUrl   = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets/${groupId}/${assetId}/${version}"
     def publishUrl = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets"
 
@@ -614,7 +610,7 @@ def ensureExchangeAsset(Map api) {
     if (result == 'EXISTS') {
         log('INFO', "Exchange asset exists: ${assetId}:${version}")
     } else if (result == 'PUBLISHED') {
-        log('INFO', "Published to Exchange as HTTP API: ${assetId}:${version} (name='${name}')")
+        log('INFO', "Published to Exchange as HTTP API: ${assetId}:${version}")
     } else if (result == 'DELETED_VERSION') {
         throw new Exception("Exchange asset ${assetId}:${version} was previously deleted — bump 'version' in apis/${api.appName}/config.yaml to a higher number and re-run.")
     } else {
