@@ -99,7 +99,9 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 
 ## Config Versioning (Nexus)
 
-Each `apis/<app>/config.yaml` carries an `apiVersion`, which is the version of that API's **config artifact** in Nexus. It is separate from `version:` (the Exchange asset version) — the two move independently.
+Each `envs/<app>/<env>/runtime.yaml` carries an `apiVersion`, which is the version of that API's **config artifact** in Nexus for that environment. Because it lives in the runtime file, environments version independently — dev can be running `1.3.0` while prod is still on `1.0.0`.
+
+It is separate from `config.yaml`'s `version:` (the Exchange asset version) — the two move independently.
 
 At deploy time the pipeline applies an environment suffix, following the same scheme as the eapi application pipeline:
 
@@ -111,7 +113,7 @@ At deploy time the pipeline applies an environment suffix, following the same sc
 
 Two stages use it:
 
-- **Resolve Config Version (Check Nexus)** runs before the approval gate. If the computed version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely.
+- **Resolve Config Version (Check Nexus)** runs before the approval gate. If the computed version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely. Bump the value in that environment's `runtime.yaml`, which leaves other environments untouched.
 - **Archive Config to Nexus** runs after a successful deploy. For each API that deployed OK it zips `apis/<app>/config.yaml` plus that environment's `runtime.yaml` and uploads it as `<app>-<version>.zip`.
 
 Git remains the deploy source — the Nexus artifact is a record for traceability and rollback, not a pipeline input. To recover a past config, download the artifact for the version you want and restore those two files.

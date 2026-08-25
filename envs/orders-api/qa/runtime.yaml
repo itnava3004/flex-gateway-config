@@ -3,6 +3,10 @@
 # so apis/orders-api/config.yaml is promoted unchanged across environments.
 app: orders-api
 env: qa
+# Nexus config-artifact version for THIS environment. Environments are
+# independent, so dev may run a newer version than prod. The pipeline
+# appends the environment suffix (-SNAPSHOT / -RC) to this base value.
+apiVersion: 1.0.0
 
 publicHostname: qa-flex.fxf.example.com
 tlsCertName: fxf-qa-wildcard

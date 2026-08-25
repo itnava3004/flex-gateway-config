@@ -61,8 +61,8 @@ pipeline {
         NO_PROXY              = 'localhost,127.0.0.1'
 
         // ── Nexus config-artifact versioning (names mirror the eapi reference) ──
-        // Only the repo-wide values live here; per-API versions differ (each
-        // config.yaml carries its own apiVersion) so those are held on the api map.
+        // Only the repo-wide values live here; versions are per-API AND per-env
+        // (each runtime.yaml carries its own apiVersion) so those sit on the api map.
         EAI_NUMBER            = '3541669'
         APP_GROUP             = 'gateway-config'
         NEXUS_CREDS_ID        = '3541669_nexus'
@@ -232,12 +232,13 @@ pipeline {
                             def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
                             def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
 
-                            // Nexus config-artifact version, from config.yaml apiVersion.
-                            // Distinct from `version:`, which is the Exchange asset version.
-                            if (!apiCfg.apiVersion) {
-                                error "apiVersion missing from ${cfgPath} — required for Nexus config versioning"
+                            // Nexus config-artifact version, from runtime.yaml apiVersion —
+                            // per-environment, so dev may run a newer version than prod.
+                            // Distinct from config.yaml `version:`, the Exchange asset version.
+                            if (!runtime.apiVersion) {
+                                error "apiVersion missing from ${rtPath} — required for Nexus config versioning"
                             }
-                            def coords = nexusCoords("${apiCfg.apiVersion}", "${appName}")
+                            def coords = nexusCoords("${runtime.apiVersion}", "${appName}")
                             log('INFO', "  ${appName}: nexusVersion=${coords.FINAL_VERSION} repo=${coords.NEXUS_REPO} group=${coords.NEXUS_GROUP}")
 
                             apiList << ([
@@ -307,7 +308,7 @@ pipeline {
                             }
                         }
                         if (duplicates) {
-                            error "Config artifact(s) already published to Nexus release repo: ${duplicates.join(', ')}. Bump apiVersion in the corresponding apis/<app>/config.yaml."
+                            error "Config artifact(s) already published to Nexus release repo: ${duplicates.join(', ')}. Bump apiVersion in the corresponding envs/<app>/${params.ENVIRONMENT}/runtime.yaml."
                         }
                     }
                 }
@@ -1007,10 +1008,11 @@ def apiCall(String method, String url, String bodyFile) {
 }
 
 // Nexus coordinates for one API's config artifact. Field names mirror the eapi
-// reference pipeline; because versioning here is per-API (each config.yaml has its
-// own apiVersion) these live on the api map rather than as single env.* values.
+// reference pipeline; because versioning here is per-API and per-environment
+// (each runtime.yaml has its own apiVersion) these live on the api map rather
+// than as single env.* values.
 //
-// Version = config.yaml apiVersion + an environment-driven suffix:
+// Version = runtime.yaml apiVersion + an environment-driven suffix:
 //   dev / test / sandbox / design -> -SNAPSHOT
 //   qa                            -> -RC
 //   preprod / prod                -> no suffix

@@ -4,7 +4,6 @@
 app: orders-api
 assetId: orders-api
 version: 1.0.0         # Exchange asset version
-apiVersion: 1.0.0      # Nexus config-artifact version (env suffix applied at deploy time)
 endpoints:
   - name: orders-cancel
     publicPath: /orders/v1/cancel
