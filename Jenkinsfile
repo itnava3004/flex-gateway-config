@@ -58,7 +58,10 @@ pipeline {
         MULESOFT_POLICY_GROUP = '68ef9520-24e9-4cf2-b2f5-620025690913'
         HTTPS_PROXY           = 'http://proxy.infosec.fedex.com:443'
         HTTP_PROXY            = 'http://proxy.infosec.fedex.com:443'
-        NO_PROXY              = 'localhost,127.0.0.1'
+        // The corporate proxy is an *egress* proxy — it reaches anypoint.mulesoft.com
+        // but cannot route to internal hosts. Nexus is internal, so .fedex.com must
+        // bypass it or every call returns HTTP 000 (no response).
+        NO_PROXY              = 'localhost,127.0.0.1,.fedex.com,.cloud.fedex.com'
 
         // ── Nexus config-artifact versioning (names mirror the eapi reference) ──
         // Only the repo-wide values live here; versions are per-API AND per-env
@@ -295,10 +298,14 @@ pipeline {
                         WAVES_TO_RUN.each { wave ->
                             (WAVE_API_MAP[wave] ?: []).each { api ->
                                 def url  = nexusArtifactUrl(api)
+                                // --noproxy: Nexus is internal; the corporate proxy cannot reach it
                                 def code = sh(
-                                    script: """curl -ks -o /dev/null -w '%{http_code}' -u "\$NEXUS_USR:\$NEXUS_PSW" -I '${url}' || echo 000""",
+                                    script: """curl -ks --noproxy '*' -o /dev/null -w '%{http_code}' -u "\$NEXUS_USR:\$NEXUS_PSW" -I '${url}' || echo 000""",
                                     returnStdout: true
                                 ).trim()
+                                if (code == '000') {
+                                    error "Cannot reach Nexus at ${url} (HTTP 000 — no response). Check network/DNS from this agent to ${env.NEXUS_URL}."
+                                }
                                 api.CHECK_URL       = url
                                 api.ARTIFACT_EXISTS = (code == '200') ? 'true' : 'false'
                                 log('INFO', "  ${api.appName}: ${api.FINAL_VERSION} in '${api.NEXUS_REPO}' exists=${api.ARTIFACT_EXISTS} (HTTP ${code})")
@@ -514,12 +521,23 @@ pipeline {
                                 def url = nexusArtifactUrl(api)
                                 sh """
                                     set -e
-                                    HTTP=\$(curl -ks -o /dev/null -w '%{http_code}' \\
+                                    # --noproxy: Nexus is internal; the corporate proxy cannot reach it
+                                    HTTP=\$(curl -ks --noproxy '*' -o /dev/null -w '%{http_code}' \\
                                         -u "\$NEXUS_USR:\$NEXUS_PSW" \\
                                         --upload-file '${zipName}' '${url}')
                                     case "\$HTTP" in
-                                        200|201|204) echo "Uploaded ${zipName} -> ${url}" ;;
-                                        *) echo "Nexus upload failed HTTP \$HTTP for ${url}" >&2; exit 1 ;;
+                                        200|201|204)
+                                            echo "Uploaded ${zipName} -> ${url}" ;;
+                                        000)
+                                            echo "Nexus unreachable (HTTP 000 — no response) for ${url}." >&2
+                                            echo "The agent could not open a connection. Check DNS/firewall to ${env.NEXUS_URL}, and that the proxy is bypassed for internal hosts." >&2
+                                            exit 1 ;;
+                                        401|403)
+                                            echo "Nexus rejected credentials (HTTP \$HTTP) for ${url}. Check the '${env.NEXUS_CREDS_ID}' credential and its deploy permission on repo '${api.NEXUS_REPO}'." >&2
+                                            exit 1 ;;
+                                        *)
+                                            echo "Nexus upload failed HTTP \$HTTP for ${url}" >&2
+                                            exit 1 ;;
                                     esac
                                 """
                                 api.NEXUS_ARTIFACT_URL = url
