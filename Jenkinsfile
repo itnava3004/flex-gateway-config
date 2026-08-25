@@ -7,10 +7,11 @@
 //   2. Read anypoint.yaml → resolve orgId, envId, flexTarget for chosen ENVIRONMENT
 //   3. Read waves/<WAVE>/manifest.yaml → list of apps to deploy
 //   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
-//   5. Authenticate via Connected App (client_credentials)
-//   6. Deploy each wave in order:
+//   5. Approval gate for test/qa/preprod/prod (skipped for dev/sandbox + DRY_RUN)
+//   6. Authenticate via Connected App (client_credentials)
+//   7. Deploy each wave in order:
 //        find-or-create instance → deploy → apply policies → validate
-//   7. Print summary; fail build if any API failed
+//   8. Print summary; fail build if any API failed
 //
 // Config (non-secret) comes from the flex-gateway-config Git repo.
 // Secrets come from the Jenkins credentials store — never from the repo.
@@ -40,6 +41,13 @@ pipeline {
         booleanParam(name: 'SKIP_POLICIES',
                defaultValue: false,
                description: 'Skip policy application step (useful for initial connectivity testing)')
+
+        string(name: 'PREPROD_PROD_APPROVERS',
+               defaultValue: '3672738',
+               description: 'Approvers allowed to deploy to PREPROD and PROD envs (comma-separated Jenkins users/groups)')
+        string(name: 'TEST_QA_APPROVERS',
+               defaultValue: '3672738',
+               description: 'Approvers allowed to deploy to TEST & QA envs (comma-separated Jenkins users/groups)')
     }
 
     environment {
@@ -52,7 +60,11 @@ pipeline {
 
     options {
         timestamps()
-        timeout(time: 60, unit: 'MINUTES')
+        // Must exceed the 48h approval window below, otherwise the build is
+        // aborted while still waiting for a higher-environment approver. Hang
+        // protection for the actual work now lives on the individual network
+        // stages (30m each) rather than on the pipeline as a whole.
+        timeout(time: 49, unit: 'HOURS')
         disableConcurrentBuilds()
     }
 
@@ -243,8 +255,64 @@ pipeline {
         }
 
         // ──────────────────────────────────────────────────────────────────── //
+        // Human sign-off for anything above dev/sandbox. Deliberately placed
+        // BEFORE Authenticate: the OAuth token is short-lived, so acquiring it
+        // first and then waiting up to 48h for an approver would leave the rest
+        // of the pipeline holding an expired token. Nothing in Anypoint has been
+        // touched at this point, so a rejection is a clean no-op.
+        stage('Approval: Higher Environment Gate') {
+            when {
+                expression {
+                    !params.DRY_RUN && !(params.ENVIRONMENT.toLowerCase() in ['dev', 'sandbox'])
+                }
+            }
+            steps {
+                script {
+                    def envKey        = params.ENVIRONMENT.toLowerCase()
+                    def approversList = (envKey in ['test', 'qa'])
+                        ? params.TEST_QA_APPROVERS
+                        : params.PREPROD_PROD_APPROVERS
+
+                    if (!approversList?.trim()) {
+                        error "Approver list for ${params.ENVIRONMENT} is empty. Cannot request approval."
+                    }
+
+                    def apiNames = (WAVES_TO_RUN ?: []).collectMany { w ->
+                        (WAVE_API_MAP[w] ?: []).collect { "${it.appName}" }
+                    }
+                    log('INFO', "Awaiting approval to deploy [${apiNames.join(', ')}] to ${params.ENVIRONMENT} (approvers: ${approversList})")
+
+                    def approval = timeout(time: 48, unit: 'HOURS') {
+                        input(
+                            id: 'HigherEnvApproval',
+                            message: "Approve deployment of ${params.WAVE} [${apiNames.join(', ')}] to ${params.ENVIRONMENT}?",
+                            ok: 'Approve & Continue',
+                            submitter: approversList,
+                            submitterParameter: 'APPROVED_BY',
+                            parameters: [
+                                text(name: 'JUSTIFICATION',
+                                     defaultValue: '',
+                                     description: 'Reason / CHG / Ticket for this deployment (required)')
+                            ]
+                        )
+                    }
+
+                    env.APPROVED_BY            = approval['APPROVED_BY'] ?: 'unknown'
+                    env.APPROVAL_JUSTIFICATION = approval['JUSTIFICATION'] ?: '(none)'
+
+                    log('INFO', "${params.ENVIRONMENT} deployment approved by: ${env.APPROVED_BY}")
+                    log('INFO', "Justification: ${env.APPROVAL_JUSTIFICATION}")
+
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.WAVE} -> ${params.ENVIRONMENT}"
+                    currentBuild.description = "Approved by ${env.APPROVED_BY} | ${env.APPROVAL_JUSTIFICATION}"
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
         stage('Authenticate to Anypoint') {
             when { expression { !params.DRY_RUN } }
+            options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 withCredentials([usernamePassword(
                         credentialsId: "anypoint-connected-app-${params.ENVIRONMENT}",
@@ -281,6 +349,7 @@ pipeline {
         // ──────────────────────────────────────────────────────────────────── //
         stage('Publish to Exchange') {
             when { expression { !params.DRY_RUN } }
+            options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
                     WAVES_TO_RUN.each { wave ->
@@ -297,6 +366,7 @@ pipeline {
         // ──────────────────────────────────────────────────────────────────── //
         stage('Create API Instance') {
             when { expression { !params.DRY_RUN } }
+            options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
                     WAVES_TO_RUN.each { wave ->
@@ -322,6 +392,7 @@ pipeline {
         // ──────────────────────────────────────────────────────────────────── //
         stage('Deploy API Instance') {
             when { expression { !params.DRY_RUN } }
+            options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
                     WAVES_TO_RUN.each { wave ->
