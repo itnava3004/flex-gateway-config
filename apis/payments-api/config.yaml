@@ -3,6 +3,8 @@
 # envs/<app>/<env>/runtime.yaml.
 app: payments-api
 assetId: payments-api
+# Display name shown in Anypoint Exchange (assetId stays the identifier)
+exchangeAssetName: Payments API
 version: 2.0.0
 endpoints:
   - name: payments-charge

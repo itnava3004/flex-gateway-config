@@ -97,6 +97,18 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 
 `apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
 
+### Naming
+
+Three different names are in play, and they land in different places:
+
+| Field | Where it comes from | What it controls |
+|---|---|---|
+| `assetId` | `config.yaml` | The Exchange asset identifier and the asset the API Manager instance points at. This is the real identity — changing it creates a new asset. |
+| `exchangeAssetName` | `config.yaml` | The **display name** shown in Exchange. Free text; spaces allowed. Falls back to the folder name if omitted. |
+| *(folder name)* | `apis/<folder>/` | The API Manager instance label, as `<folder>-<env>`. |
+
+`exchangeAssetName` is only applied when an asset is first published. Renaming it will not rename an asset that already exists in Exchange — that has to be changed in the Exchange UI.
+
 **Never hardcode credentials.** All secrets must be referenced via Anypoint Secrets Manager:
 ```yaml
 clientId: "${secure::prod.gateway.clientId}"

@@ -3,6 +3,8 @@
 # envs/<app>/<env>/runtime.yaml.
 app: orders-api
 assetId: orders-api
+# Display name shown in Anypoint Exchange (assetId stays the identifier)
+exchangeAssetName: Orders API
 version: 1.0.0
 endpoints:
   - name: orders-cancel
