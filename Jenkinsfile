@@ -7,18 +7,21 @@
 //   2. Read anypoint.yaml → resolve orgId, envId, flexTarget for chosen ENVIRONMENT
 //   3. Read waves/<WAVE>/manifest.yaml → list of apps to deploy
 //   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
-//   5. Approval gate for test/qa/preprod/prod (skipped for dev/sandbox + DRY_RUN)
-//   6. Authenticate via Connected App (client_credentials)
-//   7. Deploy each wave in order:
+//   5. Resolve each API's Nexus config version; fail on a duplicate release
+//   6. Approval gate for test/qa/preprod/prod (skipped for dev/sandbox + DRY_RUN)
+//   7. Authenticate via Connected App (client_credentials)
+//   8. Deploy each wave in order:
 //        find-or-create instance → deploy → apply policies → validate
-//   8. Print summary; fail build if any API failed
+//   9. Archive the deployed config to Nexus (traceability / rollback)
+//  10. Print summary; fail build if any API failed
 //
 // Config (non-secret) comes from the flex-gateway-config Git repo.
 // Secrets come from the Jenkins credentials store — never from the repo.
 //
-// Required Jenkins plugins : Pipeline Utility Steps (readYaml, readJSON, writeJSON)
+// Required Jenkins plugins : Pipeline Utility Steps (readYaml, readJSON, writeJSON, zip)
 // Required agent tools     : git, curl, python3
 // Required credentials     : anypoint-connected-app-<env>
+//                            3541669_nexus (Username+Password, for config archiving)
 //                             (Kind: Username+Password, user=CLIENT_ID, pass=CLIENT_SECRET)
 // =============================================================================
 
@@ -56,6 +59,16 @@ pipeline {
         HTTPS_PROXY           = 'http://proxy.infosec.fedex.com:443'
         HTTP_PROXY            = 'http://proxy.infosec.fedex.com:443'
         NO_PROXY              = 'localhost,127.0.0.1'
+
+        // ── Nexus config-artifact versioning (names mirror the eapi reference) ──
+        // Only the repo-wide values live here; per-API versions differ (each
+        // config.yaml carries its own apiVersion) so those are held on the api map.
+        EAI_NUMBER            = '3541669'
+        APP_GROUP             = 'gateway-config'
+        NEXUS_CREDS_ID        = '3541669_nexus'
+        NEXUS_URL             = 'nexus.prod.cloud.fedex.com:8443/nexus'
+        PACKAGING             = 'gateway-config'
+        ARTIFACT_TYPE         = 'zip'
     }
 
     options {
@@ -219,17 +232,26 @@ pipeline {
                             def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
                             def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
 
-                            apiList << [
+                            // Nexus config-artifact version, from config.yaml apiVersion.
+                            // Distinct from `version:`, which is the Exchange asset version.
+                            if (!apiCfg.apiVersion) {
+                                error "apiVersion missing from ${cfgPath} — required for Nexus config versioning"
+                            }
+                            def coords = nexusCoords("${apiCfg.apiVersion}", "${appName}")
+                            log('INFO', "  ${appName}: nexusVersion=${coords.FINAL_VERSION} repo=${coords.NEXUS_REPO} group=${coords.NEXUS_GROUP}")
+
+                            apiList << ([
                                 appName      : "${appName}",
                                 assetId      : "${apiCfg.assetId}",
                                 assetVersion : "${apiCfg.version}",
                                 instanceLabel: "${appName}-${params.ENVIRONMENT}",
                                 upstreamUri  : upstreamUri,
                                 proxyUri     : proxyUri,
+                                runtimePath  : rtPath,
                                 policies     : policies,
                                 wave         : wave,
                                 endpoints    : endpoints
-                            ]
+                            ] + coords)
                         }
                         waveApiMap[wave] = apiList
                         log('INFO', "Wave ${wave}: [${apiList.collect { it.appName }.join(', ')}]")
@@ -248,6 +270,44 @@ pipeline {
                                 log('INFO', "[DRY_RUN]   policies=${api.policies?.collect { it.assetId }}")
                                 ALL_RESULTS << [wave: wave, label: api.instanceLabel, status: 'DRY_RUN', instanceId: '-']
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
+        // Does this config version already exist in Nexus? Runs BEFORE the
+        // approval gate so a duplicate-version failure doesn't waste an
+        // approver's 48h window. Mirrors the reference's "bump version" guard:
+        // a release version may not be overwritten, snapshots may.
+        stage('Resolve Config Version (Check Nexus)') {
+            when { expression { !params.DRY_RUN } }
+            options { timeout(time: 15, unit: 'MINUTES') }
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                            credentialsId: env.NEXUS_CREDS_ID,
+                            usernameVariable: 'NEXUS_USR',
+                            passwordVariable: 'NEXUS_PSW')]) {
+                        def duplicates = []
+                        WAVES_TO_RUN.each { wave ->
+                            (WAVE_API_MAP[wave] ?: []).each { api ->
+                                def url  = nexusArtifactUrl(api)
+                                def code = sh(
+                                    script: """curl -ks -o /dev/null -w '%{http_code}' -u "\$NEXUS_USR:\$NEXUS_PSW" -I '${url}' || echo 000""",
+                                    returnStdout: true
+                                ).trim()
+                                api.CHECK_URL       = url
+                                api.ARTIFACT_EXISTS = (code == '200') ? 'true' : 'false'
+                                log('INFO', "  ${api.appName}: ${api.FINAL_VERSION} in '${api.NEXUS_REPO}' exists=${api.ARTIFACT_EXISTS} (HTTP ${code})")
+                                if (api.ARTIFACT_EXISTS == 'true' && api.RELEASE_FLAG == 'true') {
+                                    duplicates << "${api.appName}-${api.FINAL_VERSION}.${env.ARTIFACT_TYPE}"
+                                }
+                            }
+                        }
+                        if (duplicates) {
+                            error "Config artifact(s) already published to Nexus release repo: ${duplicates.join(', ')}. Bump apiVersion in the corresponding apis/<app>/config.yaml."
                         }
                     }
                 }
@@ -421,13 +481,65 @@ pipeline {
         }
 
         // ──────────────────────────────────────────────────────────────────── //
+        // Archive the exact config that produced each successful deployment, so a
+        // deployed instance can be traced back to (and rolled back from) a
+        // versioned Nexus artifact. Git remains the deploy source — this is a
+        // record, not an input.
+        stage('Archive Config to Nexus') {
+            when { expression { !params.DRY_RUN } }
+            options { timeout(time: 15, unit: 'MINUTES') }
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                            credentialsId: env.NEXUS_CREDS_ID,
+                            usernameVariable: 'NEXUS_USR',
+                            passwordVariable: 'NEXUS_PSW')]) {
+                        WAVES_TO_RUN.each { wave ->
+                            (WAVE_API_MAP[wave] ?: []).each { api ->
+                                def deployed = (ALL_RESULTS ?: []).find {
+                                    it.label == api.instanceLabel && it.status == 'OK'
+                                }
+                                if (!deployed) {
+                                    log('WARN', "${api.appName}: not deployed successfully — skipping Nexus archive")
+                                    return
+                                }
+
+                                def zipName = "${api.appName}-${api.FINAL_VERSION}.${env.ARTIFACT_TYPE}"
+                                sh "rm -f '${zipName}'"
+                                zip zipFile: zipName,
+                                    overwrite: true,
+                                    glob: "apis/${api.appName}/config.yaml,${api.runtimePath}"
+
+                                def url = nexusArtifactUrl(api)
+                                sh """
+                                    set -e
+                                    HTTP=\$(curl -ks -o /dev/null -w '%{http_code}' \\
+                                        -u "\$NEXUS_USR:\$NEXUS_PSW" \\
+                                        --upload-file '${zipName}' '${url}')
+                                    case "\$HTTP" in
+                                        200|201|204) echo "Uploaded ${zipName} -> ${url}" ;;
+                                        *) echo "Nexus upload failed HTTP \$HTTP for ${url}" >&2; exit 1 ;;
+                                    esac
+                                """
+                                api.NEXUS_ARTIFACT_URL = url
+                                log('INFO', "${api.appName}: archived config ${api.FINAL_VERSION} to Nexus '${api.NEXUS_REPO}'")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────── //
         stage('Summary') {
             steps {
                 script {
                     echo '════════════════════ DEPLOYMENT SUMMARY ════════════════════'
                     (ALL_RESULTS ?: []).each { r ->
                         def icon = r.status == 'OK' ? 'OK      ' : (r.status == 'DRY_RUN' ? 'DRY_RUN ' : 'FAILED  ')
-                        echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId}"
+                        def api  = (WAVE_API_MAP[r.wave] ?: []).find { it.instanceLabel == r.label }
+                        def ver  = api?.FINAL_VERSION ?: '-'
+                        echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId} | config=${ver}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
                     def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
@@ -892,6 +1004,53 @@ def apiCall(String method, String url, String bodyFile) {
         returnStdout: true
     ).trim()
     return raw
+}
+
+// Nexus coordinates for one API's config artifact. Field names mirror the eapi
+// reference pipeline; because versioning here is per-API (each config.yaml has its
+// own apiVersion) these live on the api map rather than as single env.* values.
+//
+// Version = config.yaml apiVersion + an environment-driven suffix:
+//   dev / test / sandbox / design -> -SNAPSHOT
+//   qa                            -> -RC
+//   preprod / prod                -> no suffix
+def nexusCoords(String apiVersionBase, String appName) {
+    def envKey = params.ENVIRONMENT.toLowerCase()
+    String requiredSuffix
+    if (envKey in ['dev', 'test', 'sandbox', 'design']) {
+        requiredSuffix = '-SNAPSHOT'
+    } else if (envKey == 'qa') {
+        requiredSuffix = '-RC'
+    } else {
+        requiredSuffix = ''
+    }
+
+    // Strip any suffix already present, then apply the one this env requires
+    def baseVersion  = apiVersionBase.replaceAll(/(-SNAPSHOT|-RC)$/, '')
+    def finalVersion = baseVersion + requiredSuffix
+    def releaseFlag  = !finalVersion.endsWith('-SNAPSHOT')
+    def nexusGroup   = "eai${env.EAI_NUMBER}.${env.APP_GROUP}"
+
+    return [
+        API_VERSION      : baseVersion,
+        EFFECTIVE_VERSION: finalVersion,
+        NEXUS_VERSION    : finalVersion,
+        FINAL_VERSION    : finalVersion,
+        BUILD_VERSION    : finalVersion,
+        DEV_REPO_VERSION : finalVersion,
+        DEPLOY_VERSION   : finalVersion,
+        RELEASE_FLAG     : releaseFlag.toString(),
+        NEXUS_REPO       : releaseFlag ? 'release' : 'snapshot',
+        NEXUSIQ_STAGE    : releaseFlag ? 'release' : 'build',
+        NEXUS_GROUP      : nexusGroup,
+        NEXUS_GROUP_PATH : nexusGroup.replace('.', '/')
+    ]
+}
+
+// Nexus URL for an API's config artifact (same layout the reference checks).
+def nexusArtifactUrl(Map api) {
+    def file = "${api.appName}-${api.FINAL_VERSION}.${env.ARTIFACT_TYPE}"
+    return "https://${env.NEXUS_URL}/repository/${api.NEXUS_REPO}/${api.NEXUS_GROUP_PATH}/${api.appName}/${api.FINAL_VERSION}/${file}"
 }
 
 // JSON-structured, correlation-aware log line.

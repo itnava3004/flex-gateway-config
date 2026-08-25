@@ -3,7 +3,8 @@
 # envs/<app>/<env>/runtime.yaml.
 app: payments-api
 assetId: payments-api
-version: 2.0.0
+version: 2.0.0         # Exchange asset version
+apiVersion: 1.0.0      # Nexus config-artifact version (env suffix applied at deploy time)
 endpoints:
   - name: payments-charge
     publicPath: /payments/v1/charge

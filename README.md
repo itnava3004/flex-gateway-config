@@ -97,6 +97,25 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 
 `apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
 
+## Config Versioning (Nexus)
+
+Each `apis/<app>/config.yaml` carries an `apiVersion`, which is the version of that API's **config artifact** in Nexus. It is separate from `version:` (the Exchange asset version) — the two move independently.
+
+At deploy time the pipeline applies an environment suffix, following the same scheme as the eapi application pipeline:
+
+| Environment | Suffix | Nexus repo |
+|---|---|---|
+| `dev`, `test`, `sandbox` | `-SNAPSHOT` | `snapshot` |
+| `qa` | `-RC` | `release` |
+| `preprod`, `prod` | *(none)* | `release` |
+
+Two stages use it:
+
+- **Resolve Config Version (Check Nexus)** runs before the approval gate. If the computed version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely.
+- **Archive Config to Nexus** runs after a successful deploy. For each API that deployed OK it zips `apis/<app>/config.yaml` plus that environment's `runtime.yaml` and uploads it as `<app>-<version>.zip`.
+
+Git remains the deploy source — the Nexus artifact is a record for traceability and rollback, not a pipeline input. To recover a past config, download the artifact for the version you want and restore those two files.
+
 **Never hardcode credentials.** All secrets must be referenced via Anypoint Secrets Manager:
 ```yaml
 clientId: "${secure::prod.gateway.clientId}"
