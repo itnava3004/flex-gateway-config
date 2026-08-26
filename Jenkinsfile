@@ -22,6 +22,9 @@
 // Required agent tools     : git, curl, python3
 // Required credentials     : anypoint-connected-app-<env>
 //                            3541669_nexus (Username+Password, for config archiving)
+// Required global props    : TEST_QA_APPROVERS, PREPROD_PROD_APPROVERS
+//                            (Manage Jenkins → System → Global properties;
+//                             admin-only so the triggerer cannot self-approve)
 //                             (Kind: Username+Password, user=CLIENT_ID, pass=CLIENT_SECRET)
 // =============================================================================
 
@@ -45,12 +48,10 @@ pipeline {
                defaultValue: false,
                description: 'Skip policy application step (useful for initial connectivity testing)')
 
-        string(name: 'PREPROD_PROD_APPROVERS',
-               defaultValue: '3672738',
-               description: 'Approvers allowed to deploy to PREPROD and PROD envs (comma-separated Jenkins users/groups)')
-        string(name: 'TEST_QA_APPROVERS',
-               defaultValue: '3672738',
-               description: 'Approvers allowed to deploy to TEST & QA envs (comma-separated Jenkins users/groups)')
+        // NOTE: approver lists are deliberately NOT parameters. A build parameter is
+        // editable by whoever triggers the build, so the triggerer could name
+        // themselves as approver and self-approve. They come from Jenkins global
+        // properties instead — see the approval stage.
     }
 
     environment {
@@ -336,19 +337,26 @@ pipeline {
             }
             steps {
                 script {
+                    // Approvers come from Jenkins global properties (Manage Jenkins →
+                    // System → Global properties → Environment variables), NOT from a
+                    // build parameter — only a Jenkins admin can change them, so the
+                    // person triggering the build cannot grant themselves approval.
+                    // The value may be user IDs or a group name, e.g. 'integration-leads'.
                     def envKey        = params.ENVIRONMENT.toLowerCase()
-                    def approversList = (envKey in ['test', 'qa'])
-                        ? params.TEST_QA_APPROVERS
-                        : params.PREPROD_PROD_APPROVERS
+                    def approverVar   = (envKey in ['test', 'qa']) ? 'TEST_QA_APPROVERS' : 'PREPROD_PROD_APPROVERS'
+                    def approversList = env[approverVar]
 
                     if (!approversList?.trim()) {
-                        error "Approver list for ${params.ENVIRONMENT} is empty. Cannot request approval."
+                        error "${approverVar} is not set, so no one is authorised to approve a ${params.ENVIRONMENT} deployment. A Jenkins admin must define it under Manage Jenkins → System → Global properties → Environment variables (comma-separated user IDs or a group name)."
                     }
 
                     def apiNames = (WAVES_TO_RUN ?: []).collectMany { w ->
                         (WAVE_API_MAP[w] ?: []).collect { "${it.appName}" }
                     }
-                    log('INFO', "Awaiting approval to deploy [${apiNames.join(', ')}] to ${params.ENVIRONMENT} (approvers: ${approversList})")
+                    // Count only — the log is readable by anyone who can see the build,
+                    // so the approver identities are not echoed into it.
+                    def approverCount = approversList.split(',').findAll { it.trim() }.size()
+                    log('INFO', "Awaiting approval to deploy [${apiNames.join(', ')}] to ${params.ENVIRONMENT} (${approverCount} authorised approver(s) from ${approverVar})")
 
                     def approval = timeout(time: 48, unit: 'HOURS') {
                         input(
