@@ -4,6 +4,7 @@
 app: orders-api
 assetId: orders-api
 version: 1.0.0         # Exchange asset version
+apiVersion: 1.0.0      # current version of this config contract
 endpoints:
   - name: orders-cancel
     publicPath: /orders/v1/cancel

@@ -200,6 +200,40 @@ pipeline {
                             }
                             def runtime = readYaml file: rtPath
 
+                            // ── Which config version does this environment deploy? ──
+                            // config.yaml apiVersion  = the CURRENT version of the contract
+                            // runtime.yaml deployVersion = the version THIS env is pinned to
+                            //
+                            // Equal  -> publish mode: deploy the working-copy config.yaml and
+                            //           archive it to Nexus as a new version.
+                            // Differ -> replay mode: the pinned version already exists in
+                            //           Nexus, so fetch that artifact and deploy its
+                            //           config.yaml instead of the working copy. Nothing is
+                            //           re-archived, since that version is already published.
+                            if (!apiCfg.apiVersion) {
+                                error "apiVersion missing from ${cfgPath} — it declares the current version of this config contract"
+                            }
+                            if (!runtime.deployVersion) {
+                                error "deployVersion missing from ${rtPath} — it declares which config version ${params.ENVIRONMENT} deploys"
+                            }
+                            def currentVersion = "${apiCfg.apiVersion}"
+                            def deployVersion  = "${runtime.deployVersion}"
+                            def coords         = nexusCoords(deployVersion, "${appName}")
+                            def pinned         = (deployVersion != currentVersion)
+
+                            if (pinned) {
+                                // Replace apiCfg with the pinned contract pulled from Nexus.
+                                // runtime.yaml is NOT replaced — env wiring (ports, hostnames,
+                                // backend URIs) always comes from the current Git checkout.
+                                def pinnedCfg = fetchPinnedConfig("${appName}", coords)
+                                apiCfg  = readYaml file: pinnedCfg
+                                cfgPath = pinnedCfg
+                                log('INFO', "  ${appName}: PINNED to ${coords.FINAL_VERSION} (current is ${currentVersion}) — contract from Nexus")
+                            } else {
+                                log('INFO', "  ${appName}: publishing ${coords.FINAL_VERSION} from the working copy")
+                            }
+                            coords.PINNED = pinned.toString()
+
                             // Flatten the endpoint→URI map into a plain Groovy Map so that
                             // hyphenated keys (e.g. customer-address) are safe to look up
                             // inside closures under Jenkins CPS serialisation.
@@ -242,26 +276,21 @@ pipeline {
                             def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
                             def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
 
-                            // Nexus config-artifact version, from runtime.yaml apiVersion —
-                            // per-environment, so dev may run a newer version than prod.
-                            // Distinct from config.yaml `version:`, the Exchange asset version.
-                            if (!runtime.apiVersion) {
-                                error "apiVersion missing from ${rtPath} — required for Nexus config versioning"
-                            }
-                            def coords = nexusCoords("${runtime.apiVersion}", "${appName}")
                             log('INFO', "  ${appName}: nexusVersion=${coords.FINAL_VERSION} repo=${coords.NEXUS_REPO} group=${coords.NEXUS_GROUP}")
 
                             apiList << ([
-                                appName      : "${appName}",
-                                assetId      : "${apiCfg.assetId}",
-                                assetVersion : "${apiCfg.version}",
-                                instanceLabel: "${appName}-${params.ENVIRONMENT}",
-                                upstreamUri  : upstreamUri,
-                                proxyUri     : proxyUri,
-                                runtimePath  : rtPath,
-                                policies     : policies,
-                                wave         : wave,
-                                endpoints    : endpoints
+                                appName       : "${appName}",
+                                assetId       : "${apiCfg.assetId}",
+                                assetVersion  : "${apiCfg.version}",
+                                instanceLabel : "${appName}-${params.ENVIRONMENT}",
+                                upstreamUri   : upstreamUri,
+                                proxyUri      : proxyUri,
+                                runtimePath   : rtPath,
+                                configPath    : cfgPath,
+                                currentVersion: currentVersion,
+                                policies      : policies,
+                                wave          : wave,
+                                endpoints     : endpoints
                             ] + coords)
                         }
                         waveApiMap[wave] = apiList
@@ -304,6 +333,14 @@ pipeline {
                         def duplicates = []
                         WAVES_TO_RUN.each { wave ->
                             (WAVE_API_MAP[wave] ?: []).each { api ->
+                                // A pinned API was already fetched from Nexus during Load
+                                // Config, so its existence is proven and it is not being
+                                // republished — nothing to check.
+                                if (api.PINNED == 'true') {
+                                    log('INFO', "  ${api.appName}: replaying published ${api.FINAL_VERSION} — version check not applicable")
+                                    api.ARTIFACT_EXISTS = 'true'
+                                    return
+                                }
                                 def url  = nexusArtifactUrl(api)
                                 // --noproxy: Nexus is internal; the corporate proxy cannot reach it
                                 def code = sh(
@@ -528,6 +565,14 @@ pipeline {
                                 }
                                 if (!deployed) {
                                     log('WARN', "${api.appName}: not deployed successfully — skipping Nexus archive")
+                                    return
+                                }
+                                // A pinned replay deployed a version that is already in
+                                // Nexus. Re-uploading it would either be a no-op or, worse,
+                                // overwrite a published release with the current working
+                                // copy's runtime.yaml.
+                                if (api.PINNED == 'true') {
+                                    log('INFO', "${api.appName}: ${api.FINAL_VERSION} was replayed from Nexus — already published, not re-archiving")
                                     return
                                 }
 
@@ -1084,6 +1129,50 @@ def nexusCoords(String apiVersionBase, String appName) {
         NEXUS_GROUP      : nexusGroup,
         NEXUS_GROUP_PATH : nexusGroup.replace('.', '/')
     ]
+}
+
+// Download a previously published config artifact from Nexus and return the path
+// to the config.yaml inside it. Used when an environment is pinned to a version
+// older than the working copy — that contract only exists in Nexus, not in the
+// checkout. Returns the extracted config.yaml path.
+def fetchPinnedConfig(String appName, Map coords) {
+    def zipName = "${appName}-${coords.FINAL_VERSION}.${env.ARTIFACT_TYPE}"
+    def pinDir  = "pinned/${appName}-${coords.FINAL_VERSION}"
+    def url     = nexusArtifactUrl([appName: appName] + coords)
+
+    withCredentials([usernamePassword(
+            credentialsId: env.NEXUS_CREDS_ID,
+            usernameVariable: 'NEXUS_USR',
+            passwordVariable: 'NEXUS_PSW')]) {
+        sh """
+            set -e
+            rm -rf '${pinDir}' '${zipName}'
+            # --noproxy: Nexus is internal; the corporate proxy cannot reach it
+            HTTP=\$(curl -ks --noproxy '*' -w '%{http_code}' -o '${zipName}' \\
+                -u "\$NEXUS_USR:\$NEXUS_PSW" '${url}')
+            case "\$HTTP" in
+                200)
+                    ;;
+                404)
+                    echo "Pinned config version ${coords.FINAL_VERSION} for ${appName} is not in Nexus (HTTP 404)." >&2
+                    echo "deployVersion in the runtime.yaml points at a version that was never published. Set it to a version that exists, or to the current apiVersion to publish afresh." >&2
+                    exit 1 ;;
+                000)
+                    echo "Nexus unreachable (HTTP 000) fetching ${url}." >&2
+                    exit 1 ;;
+                *)
+                    echo "Failed to fetch pinned config (HTTP \$HTTP) from ${url}" >&2
+                    exit 1 ;;
+            esac
+        """
+    }
+
+    unzip zipFile: zipName, dir: pinDir
+    def pinnedCfg = "${pinDir}/apis/${appName}/config.yaml"
+    if (!fileExists(pinnedCfg)) {
+        error "Artifact ${zipName} does not contain apis/${appName}/config.yaml — cannot deploy pinned version ${coords.FINAL_VERSION}"
+    }
+    return pinnedCfg
 }
 
 // Nexus URL for an API's config artifact (same layout the reference checks).

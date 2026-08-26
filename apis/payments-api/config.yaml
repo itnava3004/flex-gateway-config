@@ -4,6 +4,7 @@
 app: payments-api
 assetId: payments-api
 version: 2.0.0         # Exchange asset version
+apiVersion: 1.0.0      # current version of this config contract
 endpoints:
   - name: payments-charge
     publicPath: /payments/v1/charge

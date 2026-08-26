@@ -99,9 +99,25 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 
 ## Config Versioning (Nexus)
 
-Each `envs/<app>/<env>/runtime.yaml` carries an `apiVersion`, which is the version of that API's **config artifact** in Nexus for that environment. Because it lives in the runtime file, environments version independently — dev can be running `1.3.0` while prod is still on `1.0.0`.
+Two fields work together:
 
-It is separate from `config.yaml`'s `version:` (the Exchange asset version) — the two move independently.
+| Field | File | Meaning |
+|---|---|---|
+| `apiVersion` | `apis/<app>/config.yaml` | The **current** version of this API's config contract. Bump it when you change `config.yaml`. |
+| `deployVersion` | `envs/<app>/<env>/runtime.yaml` | The version **that environment deploys**. |
+
+Both are separate from `config.yaml`'s `version:`, which is the Exchange asset version.
+
+The pipeline compares them per API:
+
+- **Equal → publish mode.** The working-copy `config.yaml` is deployed and archived to Nexus as that version.
+- **Different → replay mode.** The pinned version already exists in Nexus, so the pipeline downloads that artifact and deploys *its* `config.yaml` instead of the working copy. Nothing is re-archived.
+
+Because the artifact version always comes from `config.yaml`, a given version number always means the same contract content in every environment.
+
+`runtime.yaml` itself is never replayed — environment wiring (`proxyUri`, `publicHostname`, endpoint backend URIs) always comes from the current Git checkout. Only the contract is pinned.
+
+**Promoting** new config to an environment is therefore a one-line, reviewable commit: set that environment's `deployVersion` to the new `apiVersion`. **Rolling back** is the same edit in reverse — point `deployVersion` at the previous version and re-run; the old contract comes back from Nexus without touching `config.yaml`.
 
 At deploy time the pipeline applies an environment suffix, following the same scheme as the eapi application pipeline:
 
@@ -113,10 +129,10 @@ At deploy time the pipeline applies an environment suffix, following the same sc
 
 Two stages use it:
 
-- **Resolve Config Version (Check Nexus)** runs before the approval gate. If the computed version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely. Bump the value in that environment's `runtime.yaml`, which leaves other environments untouched.
-- **Archive Config to Nexus** runs after a successful deploy. For each API that deployed OK it zips `apis/<app>/config.yaml` plus that environment's `runtime.yaml` and uploads it as `<app>-<version>.zip`.
+- **Resolve Config Version (Check Nexus)** runs before the approval gate. In publish mode, if the version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely. Skipped for a pinned replay, whose existence is already proven by the download.
+- **Archive Config to Nexus** runs after a successful deploy. For each API that deployed OK in publish mode it zips `apis/<app>/config.yaml` plus that environment's `runtime.yaml` and uploads it as `<app>-<version>.zip`. A pinned replay is not re-archived — that version is already published.
 
-Git remains the deploy source — the Nexus artifact is a record for traceability and rollback, not a pipeline input. To recover a past config, download the artifact for the version you want and restore those two files.
+In publish mode Git is the deploy source and Nexus is the record. In replay mode Nexus is the source of the contract, which is what makes a pinned rollback possible without editing `config.yaml`.
 
 **Never hardcode credentials.** All secrets must be referenced via Anypoint Secrets Manager:
 ```yaml

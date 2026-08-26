@@ -4,6 +4,7 @@
 app: customer-api
 assetId: customer-api
 version: 1.0.0         # Exchange asset version
+apiVersion: 1.0.0      # current version of this config contract
 endpoints:
   - name: customer-address
     publicPath: /customer/v1/address

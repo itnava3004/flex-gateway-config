@@ -3,10 +3,10 @@
 # so apis/customer-api/config.yaml is promoted unchanged across environments.
 app: customer-api
 env: test
-# Nexus config-artifact version for THIS environment. Environments are
-# independent, so dev may run a newer version than prod. The pipeline
-# appends the environment suffix (-SNAPSHOT / -RC) to this base value.
-apiVersion: 1.0.0
+# Config-contract version this environment deploys. Set it equal to
+# apis/<app>/config.yaml apiVersion to publish the working copy; set it to
+# an older published version to replay that version from Nexus instead.
+deployVersion: 1.0.0
 
 publicHostname: test-flex.fxf.example.com
 tlsCertName: fxf-test-wildcard
