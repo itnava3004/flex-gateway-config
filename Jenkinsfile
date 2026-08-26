@@ -18,13 +18,16 @@
 // Config (non-secret) comes from the flex-gateway-config Git repo.
 // Secrets come from the Jenkins credentials store — never from the repo.
 //
-// Required Jenkins plugins : Pipeline Utility Steps (readYaml, readJSON, writeJSON, zip)
+// Required Jenkins plugins : Pipeline Utility Steps (readYaml, readJSON, writeJSON,
+//                                                    zip, readProperties)
+//                            Config File Provider (managed approver list)
 // Required agent tools     : git, curl, python3
 // Required credentials     : anypoint-connected-app-<env>
 //                            3541669_nexus (Username+Password, for config archiving)
-// Required global props    : TEST_QA_APPROVERS, PREPROD_PROD_APPROVERS
-//                            (Manage Jenkins → System → Global properties;
-//                             admin-only so the triggerer cannot self-approve)
+// Required managed file    : 'flex-gateway-approvers' — a folder-scoped Properties
+//                            file (Folder → Config Files) with keys
+//                            TEST_QA_APPROVERS and PREPROD_PROD_APPROVERS. Kept out
+//                            of build parameters so the triggerer cannot self-approve.
 //                             (Kind: Username+Password, user=CLIENT_ID, pass=CLIENT_SECRET)
 // =============================================================================
 
@@ -57,6 +60,9 @@ pipeline {
     environment {
         CORRELATION_ID        = "${env.BUILD_TAG}"
         MULESOFT_POLICY_GROUP = '68ef9520-24e9-4cf2-b2f5-620025690913'
+        // Folder-scoped managed properties file holding the approver lists
+        // (Folder → Config Files). Only the ID lives in the repo, never the names.
+        APPROVERS_CONFIG_ID   = 'flex-gateway-approvers'
         HTTPS_PROXY           = 'http://proxy.infosec.fedex.com:443'
         HTTP_PROXY            = 'http://proxy.infosec.fedex.com:443'
         // The corporate proxy is an *egress* proxy — it reaches anypoint.mulesoft.com
@@ -337,17 +343,22 @@ pipeline {
             }
             steps {
                 script {
-                    // Approvers come from Jenkins global properties (Manage Jenkins →
-                    // System → Global properties → Environment variables), NOT from a
-                    // build parameter — only a Jenkins admin can change them, so the
-                    // person triggering the build cannot grant themselves approval.
-                    // The value may be user IDs or a group name, e.g. 'integration-leads'.
-                    def envKey        = params.ENVIRONMENT.toLowerCase()
-                    def approverVar   = (envKey in ['test', 'qa']) ? 'TEST_QA_APPROVERS' : 'PREPROD_PROD_APPROVERS'
-                    def approversList = env[approverVar]
+                    // Approvers come from the folder-scoped managed properties file
+                    // 'flex-gateway-approvers' (Folder → Config Files), NOT from a build
+                    // parameter — a parameter is editable by whoever triggers the build,
+                    // which would let them name themselves approver and self-approve.
+                    // Values may be user IDs or a group name, e.g. 'integration-leads'.
+                    def envKey      = params.ENVIRONMENT.toLowerCase()
+                    def approverVar = (envKey in ['test', 'qa']) ? 'TEST_QA_APPROVERS' : 'PREPROD_PROD_APPROVERS'
+
+                    def approversList = null
+                    configFileProvider([configFile(fileId: env.APPROVERS_CONFIG_ID, variable: 'APPROVERS_FILE')]) {
+                        def props = readProperties file: env.APPROVERS_FILE
+                        approversList = props[approverVar]
+                    }
 
                     if (!approversList?.trim()) {
-                        error "${approverVar} is not set, so no one is authorised to approve a ${params.ENVIRONMENT} deployment. A Jenkins admin must define it under Manage Jenkins → System → Global properties → Environment variables (comma-separated user IDs or a group name)."
+                        error "${approverVar} is not set in the managed properties file '${env.APPROVERS_CONFIG_ID}', so no one is authorised to approve a ${params.ENVIRONMENT} deployment. Add it under Folder → Config Files → Flex Gateway Approvers (comma-separated user IDs or a group name)."
                     }
 
                     def apiNames = (WAVES_TO_RUN ?: []).collectMany { w ->

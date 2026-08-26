@@ -140,18 +140,25 @@ Production deployments require:
 
 ### Approvers
 
-Any environment other than `dev` / `sandbox` stops at an approval gate. The authorised approvers are **not** build parameters — a parameter is editable by whoever triggers the build, which would let them name themselves as approver and self-approve. They are read from Jenkins global properties instead:
+Any environment other than `dev` / `sandbox` stops at an approval gate. The authorised approvers are **not** build parameters — a parameter is editable by whoever triggers the build, which would let them name themselves as approver and self-approve. They live in a folder-scoped managed properties file instead.
 
-| Variable | Applies to |
+**Folder → Config Files → `flex-gateway-approvers`** (type: Properties file):
+
+```properties
+TEST_QA_APPROVERS=integration-leads
+PREPROD_PROD_APPROVERS=integration-leads
+```
+
+| Key | Applies to |
 |---|---|
 | `TEST_QA_APPROVERS` | `test`, `qa` |
 | `PREPROD_PROD_APPROVERS` | `preprod`, `prod` |
 
-Set them under **Manage Jenkins → System → Global properties → Environment variables**. Only Jenkins admins can edit that page, so the list cannot be changed from a build.
-
 Each value is either a comma-separated list of Jenkins user IDs (`3672738,1673670`) or a **group name** (`integration-leads`). A group is preferable — membership is then managed in Access Management / LDAP, and joiners and leavers need no pipeline or Jenkins config change.
 
-If the relevant variable is unset the build fails at the gate rather than deploying unapproved.
+Only the file's **ID** appears in the repo (`APPROVERS_CONFIG_ID` in the Jenkinsfile); the approver names never do. If the relevant key is missing the build fails at the gate rather than deploying unapproved.
+
+Note that edit rights on a folder config file are folder-Configure, not Jenkins-admin — so whoever can configure the folder can change who approves.
 
 ---
 
