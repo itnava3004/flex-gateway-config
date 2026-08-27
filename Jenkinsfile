@@ -675,15 +675,22 @@ def updateInstance(String instanceId, Map api) {
     }
 }
 
-// Configure path-based routing for APIs with multiple endpoints (Option B:
-// one instance, one port, per-path upstreams).
+// Reconcile path-based routing so API Manager matches config.yaml exactly:
+// one instance, one port, one upstream + route per endpoint.
 //
 // Anypoint drops `routing` when supplied in the create/update body — upstreams are
 // separate resources with server-assigned UUIDs, and routing entries must reference
 // those ids. So: create the upstreams first, then PATCH routing with their ids.
+//
+// This is a reconcile, not an append: endpoints added to config.yaml appear, and
+// endpoints removed from it have their route and upstream deleted.
 def configureRouting(String instanceId, Map api) {
     def endpoints = (api?.endpoints ?: [])
-    if (endpoints.size() < 2) { return }
+    // Runs for ANY endpoint count, including one. Skipping single-endpoint APIs
+    // would mean removing endpoints from config.yaml until only one remained left
+    // the old routes in place in API Manager — config.yaml has to be authoritative
+    // for removals, not just additions.
+    if (!endpoints) { return }
 
     def base = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}"
     def uriToId = [:]
@@ -736,12 +743,32 @@ def configureRouting(String instanceId, Map api) {
     def routeBody = writeJSON(returnText: true, json: [routing: routes])
     log('INFO', "PATCH routing body for ${api.appName}: ${routeBody}")
     writeFile file: routeFile, text: routeBody
+    def patched = false
     try {
         def resp = apiCall('PATCH', base, routeFile)
         log('INFO', "PATCH routing response for ${api.appName}: ${resp.take(1000)}")
         log('INFO', "Configured ${routes.size()} routes for ${api.appName}: ${endpoints.collect { it.publicPath }.join(', ')}")
+        patched = true
     } catch (err) {
         log('WARN', "Could not PATCH routing for ${api.appName}: ${err.message}")
+    }
+
+    // ── Delete upstreams no longer referenced by config.yaml ──
+    // Only after the routing PATCH has landed, so nothing still points at them —
+    // Anypoint refuses to delete an upstream that is in use. Without this, an
+    // endpoint removed from config.yaml loses its route but leaves the upstream
+    // behind, and it reappears in the Upstream dropdown in API Manager.
+    if (patched) {
+        def wantedUris = endpoints.collect { "${it.uri}" } as Set
+        uriToId.each { uri, id ->
+            if (wantedUris.contains(uri)) { return }
+            try {
+                apiCall('DELETE', "${base}/upstreams/${id}", null)
+                log('INFO', "${api.appName}: removed orphaned upstream ${uri} (id=${id})")
+            } catch (err) {
+                log('WARN', "${api.appName}: could not delete orphaned upstream ${uri} (id=${id}): ${err.message}")
+            }
+        }
     }
 }
 
