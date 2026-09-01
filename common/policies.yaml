@@ -1,14 +1,13 @@
 # Policies applied to every API in every release.
 #
-# References only — the full definition of each policy lives in
-# policies/<policy>.yaml. A bare name uses that file's defaults; use
-# `ref:` with `config:` to layer values over them.
+# Keyed by policy name — the full definition lives in policies/<policy>.yaml.
+# Give a policy a value to layer settings over its defaults; leave it empty to
+# take the defaults unchanged.
 #
 # If an API declares the same policy in apis/<name>/config.yaml, the
 # API-specific entry wins and the common one is not applied twice.
 policies:
-  - ref: rate-limiting
-    config:
-      rateLimits:
-        - maximumRequests: 100
-          timePeriodInMilliseconds: 1000
+  rate-limiting:
+    rateLimits:
+      - maximumRequests: 100
+        timePeriodInMilliseconds: 1000

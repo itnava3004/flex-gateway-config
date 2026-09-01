@@ -28,17 +28,16 @@ endpoints:
       X-FXF-Channel: internal
     authPattern: client-id-enforcement
 
-# Policy references only. assetId, policyVersion, groupId and the default
-# config live in policies/<policy>.yaml. Add `config:` to layer API-specific
-# values over those defaults; omit it to use the defaults unchanged.
+# Policy references, keyed by policy name. assetId, policyVersion, groupId
+# and the default config live in policies/<policy>.yaml. Give a policy a value
+# to layer API-specific settings over those defaults; leave it empty to take
+# the defaults unchanged. Order here is the order policies are applied.
 policies:
-  - ref: client-id-enforcement
-  - ref: rate-limiting
-    config:
-      rateLimits:
-        - maximumRequests: 25
-          timePeriodInMilliseconds: 1000
-  - ref: ip-allowlist
-    config:
-      ips:
-        - 10.40.0.0/16
+  client-id-enforcement:
+  rate-limiting:
+    rateLimits:
+      - maximumRequests: 25
+        timePeriodInMilliseconds: 1000
+  ip-allowlist:
+    ips:
+      - 10.40.0.0/16

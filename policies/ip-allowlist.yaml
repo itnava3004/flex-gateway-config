@@ -5,10 +5,9 @@
 #
 # Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - ref: ip-allowlist
-#       config:
-#         ips:
-#           - 10.0.0.0/8
+#     ip-allowlist:
+#       ips:
+#         - 10.0.0.0/8
 
 assetId: ip-allowlist
 policyVersion: "1.1.2"

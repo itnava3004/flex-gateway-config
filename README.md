@@ -94,16 +94,17 @@ defaults:
   ips: []
 ```
 
-`apis/<app>/config.yaml` carries **references only** — never the definition. Every entry uses `ref:`. Add `config:` to layer API-specific values over the defaults; omit it to take the defaults unchanged:
+`apis/<app>/config.yaml` carries **references only** — never the definition. `policies:` is a map keyed by policy name. Give a policy a value to layer API-specific settings over its defaults; leave it empty to take the defaults unchanged:
 
 ```yaml
 policies:
-  - ref: client-id-enforcement     # defaults, unchanged
-  - ref: ip-allowlist              # defaults + this API's CIDR ranges
-    config:
-      ips:
-        - 10.40.0.0/16
+  client-id-enforcement:           # defaults, unchanged
+  ip-allowlist:                    # defaults + this API's CIDR ranges
+    ips:
+      - 10.40.0.0/16
 ```
+
+The order the policies appear in is the order they are applied.
 
 Only the keys you supply are overridden; everything else falls through to the policy file. A `policyVersion` bump is therefore a one-line change in `policies/`, not an edit across every API that uses it.
 

@@ -5,11 +5,10 @@
 #
 # Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - ref: rate-limiting
-#       config:
-#         rateLimits:
-#           - maximumRequests: 50
-#             timePeriodInMilliseconds: 1000
+#     rate-limiting:
+#       rateLimits:
+#         - maximumRequests: 50
+#           timePeriodInMilliseconds: 1000
 
 assetId: rate-limiting
 policyVersion: "1.5.1"

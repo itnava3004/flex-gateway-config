@@ -5,10 +5,9 @@
 #
 # Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - ref: fxf-custom-header
-#       config:
-#         headers:
-#           X-FXF-Environment: dev
+#     fxf-custom-header:
+#       headers:
+#         X-FXF-Environment: dev
 
 assetId: fxf-custom-header
 policyVersion: "1.0.0"

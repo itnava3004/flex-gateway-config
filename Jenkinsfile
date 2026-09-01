@@ -191,9 +191,7 @@ pipeline {
                     def commonPolicies = []
                     if (fileExists('common/policies.yaml')) {
                         def commonCfg = readYaml file: 'common/policies.yaml'
-                        commonPolicies = (commonCfg.policies ?: []).collect { p ->
-                            resolvePolicy(p, POLICY_CATALOGUE, 'common/policies.yaml')
-                        }
+                        commonPolicies = resolvePolicies(commonCfg.policies, POLICY_CATALOGUE, 'common/policies.yaml')
                         if (commonPolicies) {
                             log('INFO', "Common policies: ${commonPolicies.collect { it.assetId }.join(', ')}")
                         }
@@ -345,9 +343,7 @@ pipeline {
                             def proxyUri    = "${runtime.proxyUri ?: 'http://0.0.0.0:8080'}"
                             log('INFO', "  ${appName}: gateway=${gwName}  proxyUri=${proxyUri}  upstream=${upstreamUri} (host only)  ${endpoints.size()} routes")
 
-                            def apiPolicies = (apiCfg.policies ?: []).collect { p ->
-                                resolvePolicy(p, POLICY_CATALOGUE, cfgPath)
-                            }
+                            def apiPolicies = resolvePolicies(apiCfg.policies, POLICY_CATALOGUE, cfgPath)
                             // Merge: API-specific policies take precedence; common policies fill in the rest
                             def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
                             def policies = apiPolicies + commonPolicies.findAll { !(it.assetId in apiSpecificIds) }
@@ -1311,36 +1307,49 @@ def nexusArtifactUrl(Map api) {
 //
 // assetId, policyVersion and groupId always come from policies/<policy>.yaml —
 // they are never restated in config.yaml, so a version bump happens in one place.
-def resolvePolicy(Object entry, Map catalogue, String sourcePath) {
-    String ref
-    Map    overrides = [:]
-
-    if (entry instanceof CharSequence) {
-        ref = "${entry}"
-    } else if (entry instanceof Map) {
-        ref = "${entry.ref ?: entry.assetId ?: ''}"
-        overrides = (entry.config ?: [:]) as Map
+def resolvePolicies(Object policies, Map catalogue, String sourcePath) {
+    // policies: is a map keyed by policy name; the value is the API-specific
+    // overrides, or empty to take the catalogue defaults unchanged:
+    //
+    //     policies:
+    //       client-id-enforcement:
+    //       ip-allowlist:
+    //         ips: [10.40.0.0/16]
+    //
+    // A list of names, or of { ref:, config: } maps, is still accepted so
+    // configs written against the earlier form keep working.
+    def entries = []
+    if (policies instanceof Map) {
+        policies.each { k, v -> entries << [name: "${k}", overrides: (v ?: [:]) as Map] }
+    } else if (policies instanceof List) {
+        policies.each { e ->
+            if (e instanceof CharSequence) {
+                entries << [name: "${e}", overrides: [:]]
+            } else if (e instanceof Map) {
+                entries << [name: "${e.ref ?: e.assetId ?: ''}", overrides: (e.config ?: [:]) as Map]
+            }
+        }
+    } else if (policies != null) {
+        error "Unreadable policies: block in ${sourcePath} — expected a map keyed by policy name. Got: ${policies}"
     }
-    if (!ref) {
-        error "Unreadable policy entry in ${sourcePath}: expected a policy name, or a map with 'ref:'. Got: ${entry}"
+
+    return entries.collect { en ->
+        if (!en.name) {
+            error "Unnamed policy entry in ${sourcePath} — each entry must be keyed by a policy name from policies/"
+        }
+        def cat = catalogue[en.name]
+        if (!cat) {
+            error "Policy '${en.name}' referenced in ${sourcePath} is not defined in policies/. Available: ${catalogue.keySet().join(', ')}"
+        }
+        // API-specific values win over the catalogue defaults, key by key
+        def merged = [:]
+        (cat.defaults ?: [:]).each { k, v -> merged["${k}"] = v }
+        en.overrides.each { k, v -> merged["${k}"] = v }
+        [assetId      : cat.assetId,
+         groupId      : cat.groupId,
+         policyVersion: cat.policyVersion,
+         config       : merged]
     }
-
-    def def_ = catalogue[ref]
-    if (!def_) {
-        error "Policy '${ref}' referenced in ${sourcePath} is not defined in policies/. Available: ${catalogue.keySet().join(', ')}"
-    }
-
-    // API-specific values win over the catalogue defaults, key by key
-    def merged = [:]
-    (def_.defaults ?: [:]).each { k, v -> merged["${k}"] = v }
-    overrides.each { k, v -> merged["${k}"] = v }
-
-    return [
-        assetId      : def_.assetId,
-        groupId      : def_.groupId,
-        policyVersion: def_.policyVersion,
-        config       : merged
-    ]
 }
 
 // JSON-structured, correlation-aware log line.
