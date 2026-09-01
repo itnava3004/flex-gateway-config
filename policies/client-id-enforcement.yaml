@@ -4,7 +4,7 @@
 #
 # Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - client-id-enforcement
+#     - ref: client-id-enforcement
 
 assetId: client-id-enforcement
 policyVersion: "1.3.3"

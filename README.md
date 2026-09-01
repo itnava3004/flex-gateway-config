@@ -94,11 +94,11 @@ defaults:
   ips: []
 ```
 
-`apis/<app>/config.yaml` carries **references only** — never the definition. A bare name uses the defaults as-is; `ref:` with `config:` layers API-specific values over them:
+`apis/<app>/config.yaml` carries **references only** — never the definition. Every entry uses `ref:`. Add `config:` to layer API-specific values over the defaults; omit it to take the defaults unchanged:
 
 ```yaml
 policies:
-  - client-id-enforcement          # defaults, unchanged
+  - ref: client-id-enforcement     # defaults, unchanged
   - ref: ip-allowlist              # defaults + this API's CIDR ranges
     config:
       ips:

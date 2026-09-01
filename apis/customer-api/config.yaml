@@ -29,10 +29,10 @@ endpoints:
     authPattern: client-id-enforcement
 
 # Policy references only. assetId, policyVersion, groupId and the default
-# config live in policies/<policy>.yaml — a bare name uses those defaults,
-# and `config:` layers API-specific values over them.
+# config live in policies/<policy>.yaml. Add `config:` to layer API-specific
+# values over those defaults; omit it to use the defaults unchanged.
 policies:
-  - client-id-enforcement
+  - ref: client-id-enforcement
   - ref: rate-limiting
     config:
       rateLimits:
