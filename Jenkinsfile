@@ -130,24 +130,25 @@ pipeline {
                     // ports. An API instance deploys to exactly one of them, chosen
                     // per app in runtime.yaml. Flattened to plain Strings so the map
                     // is safe inside closures under CPS serialisation.
+                    // The map key IS the gateway's Runtime Manager name; the only
+                    // value it carries is the target id.
                     def GATEWAYS = [:]
                     envBlock.gateways?.each { k, v ->
-                        GATEWAYS["${k}"] = [id: "${v.id}", name: "${v.name}"]
+                        GATEWAYS["${k}"] = "${v.id}"
                     }
                     // Legacy single-gateway form: flexTarget: { id, name }
                     if (!GATEWAYS && envBlock.flexTarget) {
-                        GATEWAYS['default'] = [id: "${envBlock.flexTarget.id}",
-                                               name: "${envBlock.flexTarget.name}"]
+                        GATEWAYS["${envBlock.flexTarget.name}"] = "${envBlock.flexTarget.id}"
                     }
                     if (!GATEWAYS) {
-                        error "No gateways defined for environment '${params.ENVIRONMENT}' in anypoint.yaml — add a gateways: map (or a single flexTarget:)"
+                        error "No gateways defined for environment '${params.ENVIRONMENT}' in anypoint.yaml — add a gateways: map keyed by gateway name"
                     }
                     def DEFAULT_GATEWAY = "${envBlock.defaultGateway ?: GATEWAYS.keySet().first()}"
                     if (!GATEWAYS.containsKey(DEFAULT_GATEWAY)) {
                         error "defaultGateway '${DEFAULT_GATEWAY}' for environment '${params.ENVIRONMENT}' is not in gateways: (${GATEWAYS.keySet().join(', ')})"
                     }
 
-                    log('INFO', "Target: env=${params.ENVIRONMENT} gateways=[${GATEWAYS.collect { k, v -> "${k}→${v.name}" }.join(', ')}] default=${DEFAULT_GATEWAY}")
+                    log('INFO', "Target: env=${params.ENVIRONMENT} gateways=[${GATEWAYS.keySet().join(', ')}] default=${DEFAULT_GATEWAY}")
 
                     // ── Determine releases ────────────────────────────────────────
                     def releaseInput = params.RELEASE?.trim()?.toUpperCase() ?: 'R1'
@@ -253,10 +254,10 @@ pipeline {
                                 error "deployVersion missing from ${rtPath} — it declares which config version ${params.ENVIRONMENT} deploys"
                             }
                             // Which gateway in this environment does this API deploy to?
-                            def gwKey = "${runtime.gateway ?: DEFAULT_GATEWAY}"
-                            def gw    = GATEWAYS[gwKey]
-                            if (!gw) {
-                                error "${rtPath} names gateway '${gwKey}', which is not defined for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${GATEWAYS.keySet().join(', ')})"
+                            def gwName = "${runtime.gateway ?: DEFAULT_GATEWAY}"
+                            def gwId   = GATEWAYS[gwName]
+                            if (!gwId) {
+                                error "${rtPath} names gateway '${gwName}', which is not defined for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${GATEWAYS.keySet().join(', ')})"
                             }
 
                             def currentVersion = "${apiCfg.apiVersion}"
@@ -315,7 +316,7 @@ pipeline {
                             def upstreamUri = "${runtime.upstreamUri ?: endpoints[0].uri}"
                             // proxyUri: from runtime.yaml, else a sane default on port 8080
                             def proxyUri    = "${runtime.proxyUri ?: 'http://0.0.0.0:8080'}"
-                            log('INFO', "  ${appName}: gateway=${gwKey} (${gw.name})  proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
+                            log('INFO', "  ${appName}: gateway=${gwName}  proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
 
                             def apiPolicies = (apiCfg.policies ?: []).collect { p ->
                                 resolvePolicy(p, POLICY_CATALOGUE, cfgPath)
@@ -335,9 +336,8 @@ pipeline {
                                 proxyUri      : proxyUri,
                                 runtimePath   : rtPath,
                                 configPath    : cfgPath,
-                                gatewayKey    : gwKey,
-                                flexTargetId  : gw.id,
-                                flexTargetName: gw.name,
+                                flexTargetId  : gwId,
+                                flexTargetName: gwName,
                                 currentVersion: currentVersion,
                                 policies      : policies,
                                 release          : release,

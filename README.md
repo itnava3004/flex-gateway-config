@@ -154,21 +154,21 @@ environments:
   dev:
     environmentId: 0762c381-...
     gatewayVersion: "1.12.7"
-    defaultGateway: primary
+    defaultGateway: fxf-dev-gtwy
     gateways:
-      primary:
-        id:   2a0abcce-...
-        name: fxf-dev-gtwy
-      secondary:
-        id:   ...
-        name: fxf-dev-gtwy-2
+      fxf-dev-gtwy:
+        id: 2a0abcce-...
+      fxf-dev-gtwy-2:
+        id: ...
 ```
+
+The key is the gateway's name in Runtime Manager; the only value it carries is the target `id`.
 
 An API instance deploys to **exactly one** gateway. Which one is chosen per app, in
 that environment's `runtime.yaml`:
 
 ```yaml
-gateway: secondary        # omit to use defaultGateway
+gateway: fxf-dev-gtwy-2   # omit to use defaultGateway
 ```
 
 Naming a gateway that is not declared for the environment fails the build and lists
@@ -178,8 +178,7 @@ Because the choice lives in `runtime.yaml`, the same application can sit on diff
 gateways in different environments — split across two in dev, on a single gateway in
 production — with no change to `config.yaml`.
 
-The older single-gateway form is still accepted and is treated as one gateway keyed
-`default`:
+The older single-gateway form is still accepted and is keyed by its own `name`:
 
 ```yaml
 flexTarget:
