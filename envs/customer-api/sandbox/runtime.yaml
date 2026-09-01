@@ -19,9 +19,13 @@ tlsCertName: fxf-dev-wildcard
 # Runtime Manager to run all three APIs at once.
 proxyUri: http://0.0.0.0:8081
 
-# Backend URI per endpoint. Keys must match the endpoint names in
-# apis/customer-api/config.yaml.
-endpoints:
-  customer-address: https://l7-gw.fxf.internal/customer/address
-  customer-consent: https://l7-gw.fxf.internal/customer/consent
-  customer-profile: https://l7-gw.fxf.internal/customer/profile
+# Backend host every route for this API forwards to. Host only — no path.
+# Per-endpoint paths live on the route rules (publicPath in config.yaml).
+upstreamHost: https://l7-gw.fxf.internal
+
+# Optional per-environment path overrides, keyed on endpoint name. Omit to
+# use the publicPath declared in apis/<app>/config.yaml.
+# endpoints:
+#   customer-address: /customer/address
+#   customer-consent: /customer/consent
+#   customer-profile: /customer/profile

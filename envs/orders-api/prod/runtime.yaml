@@ -16,10 +16,14 @@ tlsCertName: fxf-prod-wildcard
 
 proxyUri: http://0.0.0.0:8082
 
-# Backend URI per endpoint. Keys must match the endpoint names in
-# apis/orders-api/config.yaml.
-endpoints:
-  orders-cancel: https://l7-gw.fxf.internal/orders/cancel
-  orders-create: https://l7-gw.fxf.internal/orders/create
-  orders-list:   https://l7-gw.fxf.internal/orders/list
-  orders-track:  https://l7-gw.fxf.internal/orders/track
+# Backend host every route for this API forwards to. Host only — no path.
+# Per-endpoint paths live on the route rules (publicPath in config.yaml).
+upstreamHost: https://l7-gw.fxf.internal
+
+# Optional per-environment path overrides, keyed on endpoint name. Omit to
+# use the publicPath declared in apis/<app>/config.yaml.
+# endpoints:
+#   orders-cancel: /orders/cancel
+#   orders-create: /orders/create
+#   orders-list: /orders/list
+#   orders-track: /orders/track

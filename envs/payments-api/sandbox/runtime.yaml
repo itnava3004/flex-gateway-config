@@ -19,9 +19,13 @@ tlsCertName: fxf-dev-wildcard
 # Runtime Manager to run all three APIs at once.
 proxyUri: http://0.0.0.0:8082
 
-# Backend URI per endpoint. Keys must match the endpoint names in
-# apis/payments-api/config.yaml.
-endpoints:
-  payments-charge: https://l7-gw.fxf.internal/payments/charge
-  payments-refund: https://l7-gw.fxf.internal/payments/refund
-  payments-status: https://l7-gw.fxf.internal/payments/status
+# Backend host every route for this API forwards to. Host only — no path.
+# Per-endpoint paths live on the route rules (publicPath in config.yaml).
+upstreamHost: https://l7-gw.fxf.internal
+
+# Optional per-environment path overrides, keyed on endpoint name. Omit to
+# use the publicPath declared in apis/<app>/config.yaml.
+# endpoints:
+#   payments-charge: /payments/charge
+#   payments-refund: /payments/refund
+#   payments-status: /payments/status

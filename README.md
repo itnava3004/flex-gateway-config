@@ -139,7 +139,19 @@ endpoints:
 
 ## Environment Configuration
 
-Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`. It is self-contained and holds every environment-specific value for that API: the gateway `publicHostname` and `tlsCertName`, the `proxyUri` (listener port), and the backend `uri` for each endpoint.
+Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`. It is self-contained and holds every environment-specific value for that API: the gateway `publicHostname` and `tlsCertName`, the `proxyUri` (listener port), and the backend `upstreamHost`.
+
+`upstreamHost` is **scheme and host only, with no path** — the build rejects a value containing one. All of an API's endpoints forward to the same host and differ only by path, so the pipeline creates **one upstream per API** rather than one per endpoint, and each route carries its own path rule. Across ~1,000 endpoints that is the difference between one upstream per application and one per endpoint.
+
+```yaml
+upstreamHost: https://l7-gw.fxf.internal
+
+# optional per-environment path overrides
+# endpoints:
+#   customer-address: /customer/address
+```
+
+The path a route matches on — and therefore forwards to the host — is `publicPath` from `config.yaml`, unless that environment's `runtime.yaml` overrides it under `endpoints:`.
 
 `apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
 

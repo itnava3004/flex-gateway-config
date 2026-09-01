@@ -278,45 +278,60 @@ pipeline {
                             }
                             coords.PINNED = pinned.toString()
 
-                            // Flatten the endpoint→URI map into a plain Groovy Map so that
-                            // hyphenated keys (e.g. customer-address) are safe to look up
-                            // inside closures under Jenkins CPS serialisation.
-                            def epUris = [:]
-                            runtime.endpoints?.each { k, v -> epUris["${k}"] = "${v}" }
+                            // The upstream is the backend HOST only — one per app, shared
+                            // by every route. Paths live on the route rules, so an app with
+                            // 30 endpoints needs one upstream rather than 30.
+                            def upstreamHost = "${runtime.upstreamHost ?: ''}"
+                            if (!upstreamHost) {
+                                error "upstreamHost missing from ${rtPath} — the backend host (scheme + host, no path) every route for ${appName} forwards to"
+                            }
+                            if (upstreamHost.replaceAll('^https?://', '').contains('/')) {
+                                error "upstreamHost in ${rtPath} must be scheme + host only, with no path: got '${upstreamHost}'. Per-endpoint paths belong on the route rules."
+                            }
+                            upstreamHost = upstreamHost.replaceAll('/+$', '')
+
+                            // Optional per-environment path override, keyed on endpoint name.
+                            // Flattened to plain Strings so hyphenated keys are safe to look
+                            // up inside closures under Jenkins CPS serialisation.
+                            def epPaths = [:]
+                            runtime.endpoints?.each { k, v -> epPaths["${k}"] = "${v}" }
 
                             // Join the env-independent contract (config.yaml) with the
-                            // per-env backend URIs (runtime.yaml), keyed on endpoint name.
+                            // per-env host and any path overrides (runtime.yaml).
                             def endpoints = (apiCfg.endpoints ?: []).collect { ep ->
                                 def epName = "${ep.name}"
-                                def uri    = epUris[epName]
-                                if (!uri) {
-                                    error "No URI for endpoint '${epName}' of ${appName} in ${rtPath} — add it under endpoints:"
-                                }
+                                def uri    = upstreamHost
                                 // methods / headers are optional route-rule constraints
                                 // declared in config.yaml; flattened to plain types so
                                 // they survive CPS serialisation inside closures.
                                 def epMethods = (ep.methods ?: []).collect { "${it}".toUpperCase() }
                                 def epHeaders = [:]
                                 ep.headers?.each { k, v -> epHeaders["${k}"] = "${v}" }
+                                // The path the gateway matches on, and forwards to the
+                                // host. runtime.yaml may override it per environment.
+                                def epPath = epPaths[epName] ?: "${ep.publicPath ?: ''}"
+                                if (!epPath) {
+                                    error "No path for endpoint '${epName}' of ${appName} — set publicPath in ${cfgPath} or override it in ${rtPath}"
+                                }
                                 [name      : epName,
                                  uri       : uri,
-                                 publicPath: "${ep.publicPath ?: ''}",
+                                 publicPath: epPath,
                                  methods   : epMethods,
                                  headers   : epHeaders]
                             }
                             if (!endpoints) {
                                 error "No endpoints declared in ${cfgPath}"
                             }
-                            def orphans = epUris.keySet() - endpoints.collect { it.name }
+                            def orphans = epPaths.keySet() - endpoints.collect { it.name }
                             if (orphans) {
-                                log('WARN', "${appName}: ${rtPath} defines URIs for unknown endpoints ${orphans.join(', ')} — not present in ${cfgPath}")
+                                log('WARN', "${appName}: ${rtPath} overrides paths for unknown endpoints ${orphans.join(', ')} — not present in ${cfgPath}")
                             }
 
-                            // upstreamUri: explicit override in runtime.yaml, else first endpoint
-                            def upstreamUri = "${runtime.upstreamUri ?: endpoints[0].uri}"
+                            // The API Manager endpoint's own upstream is the same host
+                            def upstreamUri = upstreamHost
                             // proxyUri: from runtime.yaml, else a sane default on port 8080
                             def proxyUri    = "${runtime.proxyUri ?: 'http://0.0.0.0:8080'}"
-                            log('INFO', "  ${appName}: gateway=${gwName}  proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
+                            log('INFO', "  ${appName}: gateway=${gwName}  proxyUri=${proxyUri}  upstream=${upstreamUri} (host only)  ${endpoints.size()} routes")
 
                             def apiPolicies = (apiCfg.policies ?: []).collect { p ->
                                 resolvePolicy(p, POLICY_CATALOGUE, cfgPath)
@@ -728,7 +743,7 @@ def updateInstance(String instanceId, Map api) {
 }
 
 // Reconcile path-based routing so API Manager matches config.yaml exactly:
-// one instance, one port, one upstream + route per endpoint.
+// one instance, one port, ONE host-only upstream, and one route per endpoint.
 //
 // Anypoint drops `routing` when supplied in the create/update body — upstreams are
 // separate resources with server-assigned UUIDs, and routing entries must reference
@@ -758,43 +773,48 @@ def configureRouting(String instanceId, Map api) {
         log('WARN', "Could not GET upstreams for ${api.appName}: ${err.message}")
     }
 
-    // ── Create any upstream that doesn't exist yet ──
-    endpoints.each { ep ->
-        if (uriToId["${ep.uri}"]) { return }
-        def upFile = "upstream-${api.appName}-${ep.name}.json"
-        writeFile file: upFile, text: writeJSON(returnText: true, json: [label: ep.name, uri: ep.uri])
+    // ── One host-only upstream, shared by every route ──
+    // All endpoints of an API forward to the same backend host and differ only
+    // by path, so a single upstream serves them all. Creating one per endpoint
+    // would mean ~1,000 upstreams across the estate for no routing benefit.
+    def hostUri = "${endpoints[0].uri}"
+    if (!uriToId[hostUri]) {
+        def upFile = "upstream-${api.appName}.json"
+        writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.appName, uri: hostUri])
         try {
             def resp = apiCall('POST', "${base}/upstreams", upFile)
-            log('INFO', "POST upstream '${ep.name}' for ${api.appName}: ${resp.take(500)}")
+            log('INFO', "POST upstream '${api.appName}' -> ${hostUri}: ${resp.take(500)}")
             def created = readJSON text: resp
-            if (created?.id) { uriToId["${ep.uri}"] = "${created.id}" }
+            if (created?.id) { uriToId[hostUri] = "${created.id}" }
         } catch (err) {
-            log('WARN', "Could not create upstream '${ep.name}' for ${api.appName}: ${err.message}")
+            log('WARN', "Could not create upstream for ${api.appName} (${hostUri}): ${err.message}")
         }
+    } else {
+        log('INFO', "${api.appName}: reusing existing upstream ${hostUri}")
     }
 
     // ── PATCH routing, referencing upstreams by their server-assigned ids ──
     // label comes from the endpoint's `name` in config.yaml so routes are
     // identifiable in the Anypoint UI rather than showing as unnamed.
-    def routes = endpoints.findAll { uriToId["${it.uri}"] }.collect { ep ->
-        // Anypoint expects methods as a pipe-separated string ("GET|POST") and
-        // headers as a name→value map. Both are omitted when not declared, which
-        // leaves the route matching on path alone.
+    def hostId = uriToId[hostUri]
+    if (!hostId) {
+        log('WARN', "No upstream resolved for ${api.appName} (${hostUri}) — skipping routing PATCH")
+        return
+    }
+
+    // Every route points at the same host-only upstream and is distinguished by
+    // its path rule. Anypoint expects methods as a pipe-separated string
+    // ("GET|POST") and headers as a name→value map; both are omitted when not
+    // declared, leaving the route matching on path alone.
+    def routes = endpoints.collect { ep ->
         def rules = [path: "${ep.publicPath}(.*)"]
         if (ep.methods) { rules.methods = ep.methods.join('|') }
         if (ep.headers) { rules.headers = ep.headers }
         [
             label    : "${ep.name}",
-            upstreams: [[id: uriToId["${ep.uri}"], weight: 100]],
+            upstreams: [[id: hostId, weight: 100]],
             rules    : rules
         ]
-    }
-    if (routes.size() < endpoints.size()) {
-        log('WARN', "Only ${routes.size()}/${endpoints.size()} upstreams resolved for ${api.appName} — routing will be incomplete")
-    }
-    if (!routes) {
-        log('WARN', "No upstreams resolved for ${api.appName} — skipping routing PATCH")
-        return
     }
 
     def routeFile = "routing-${api.appName}.json"
@@ -817,7 +837,7 @@ def configureRouting(String instanceId, Map api) {
     // endpoint removed from config.yaml loses its route but leaves the upstream
     // behind, and it reappears in the Upstream dropdown in API Manager.
     if (patched) {
-        def wantedUris = endpoints.collect { "${it.uri}" } as Set
+        def wantedUris = [hostUri] as Set
         uriToId.each { uri, id ->
             if (wantedUris.contains(uri)) { return }
             try {
