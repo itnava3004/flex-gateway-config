@@ -143,6 +143,52 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 
 `apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
 
+## Gateways
+
+An environment may front **several gateways** — for example dev split across two so
+APIs are not all competing for the same listener ports. They are declared per
+environment in `anypoint.yaml`:
+
+```yaml
+environments:
+  dev:
+    environmentId: 0762c381-...
+    gatewayVersion: "1.12.7"
+    defaultGateway: primary
+    gateways:
+      primary:
+        id:   2a0abcce-...
+        name: fxf-dev-gtwy
+      secondary:
+        id:   ...
+        name: fxf-dev-gtwy-2
+```
+
+An API instance deploys to **exactly one** gateway. Which one is chosen per app, in
+that environment's `runtime.yaml`:
+
+```yaml
+gateway: secondary        # omit to use defaultGateway
+```
+
+Naming a gateway that is not declared for the environment fails the build and lists
+what is available, rather than deploying to the wrong target.
+
+Because the choice lives in `runtime.yaml`, the same application can sit on different
+gateways in different environments — split across two in dev, on a single gateway in
+production — with no change to `config.yaml`.
+
+The older single-gateway form is still accepted and is treated as one gateway keyed
+`default`:
+
+```yaml
+flexTarget:
+  id:   ...
+  name: demo-1
+```
+
+---
+
 ## Config Versioning (Nexus)
 
 Two fields work together:

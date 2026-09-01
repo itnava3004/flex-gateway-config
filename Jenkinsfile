@@ -4,7 +4,7 @@
 // -----------------------------------------------------------------------------
 // Flow:
 //   1. Checkout flex-gateway-config repo (or the repo this Jenkinsfile lives in)
-//   2. Read anypoint.yaml → resolve orgId, envId, flexTarget for chosen ENVIRONMENT
+//   2. Read anypoint.yaml → resolve orgId, envId and the gateways for ENVIRONMENT
 //   3. Read release/<RELEASE>/manifest.yaml → list of apps to deploy
 //   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
 //   5. Resolve each API's Nexus config version; fail on a duplicate release
@@ -122,11 +122,32 @@ pipeline {
                     env.ORG_ID            = "${acfg.anypoint.organizationId}"
                     env.ENV_ID            = "${envBlock.environmentId}"
                     env.GATEWAY_VERSION   = "${envBlock.gatewayVersion}"
-                    env.FLEX_TARGET_ID    = "${envBlock.flexTarget.id}"
-                    env.FLEX_TARGET_NAME  = "${envBlock.flexTarget.name}"
                     env.ANYPOINT_BASE_URL = "${acfg.anypoint.baseUrl ?: 'https://anypoint.mulesoft.com'}"
 
-                    log('INFO', "Target: env=${params.ENVIRONMENT} flexTarget=${env.FLEX_TARGET_NAME}")
+                    // ── Gateways available in this environment ──────────────────
+                    // An environment may front several gateways — e.g. dev split
+                    // across two so APIs are not all competing for the same listener
+                    // ports. An API instance deploys to exactly one of them, chosen
+                    // per app in runtime.yaml. Flattened to plain Strings so the map
+                    // is safe inside closures under CPS serialisation.
+                    def GATEWAYS = [:]
+                    envBlock.gateways?.each { k, v ->
+                        GATEWAYS["${k}"] = [id: "${v.id}", name: "${v.name}"]
+                    }
+                    // Legacy single-gateway form: flexTarget: { id, name }
+                    if (!GATEWAYS && envBlock.flexTarget) {
+                        GATEWAYS['default'] = [id: "${envBlock.flexTarget.id}",
+                                               name: "${envBlock.flexTarget.name}"]
+                    }
+                    if (!GATEWAYS) {
+                        error "No gateways defined for environment '${params.ENVIRONMENT}' in anypoint.yaml — add a gateways: map (or a single flexTarget:)"
+                    }
+                    def DEFAULT_GATEWAY = "${envBlock.defaultGateway ?: GATEWAYS.keySet().first()}"
+                    if (!GATEWAYS.containsKey(DEFAULT_GATEWAY)) {
+                        error "defaultGateway '${DEFAULT_GATEWAY}' for environment '${params.ENVIRONMENT}' is not in gateways: (${GATEWAYS.keySet().join(', ')})"
+                    }
+
+                    log('INFO', "Target: env=${params.ENVIRONMENT} gateways=[${GATEWAYS.collect { k, v -> "${k}→${v.name}" }.join(', ')}] default=${DEFAULT_GATEWAY}")
 
                     // ── Determine releases ────────────────────────────────────────
                     def releaseInput = params.RELEASE?.trim()?.toUpperCase() ?: 'R1'
@@ -231,6 +252,13 @@ pipeline {
                             if (!runtime.deployVersion) {
                                 error "deployVersion missing from ${rtPath} — it declares which config version ${params.ENVIRONMENT} deploys"
                             }
+                            // Which gateway in this environment does this API deploy to?
+                            def gwKey = "${runtime.gateway ?: DEFAULT_GATEWAY}"
+                            def gw    = GATEWAYS[gwKey]
+                            if (!gw) {
+                                error "${rtPath} names gateway '${gwKey}', which is not defined for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${GATEWAYS.keySet().join(', ')})"
+                            }
+
                             def currentVersion = "${apiCfg.apiVersion}"
                             def deployVersion  = "${runtime.deployVersion}"
                             def coords         = nexusCoords(deployVersion, "${appName}")
@@ -287,7 +315,7 @@ pipeline {
                             def upstreamUri = "${runtime.upstreamUri ?: endpoints[0].uri}"
                             // proxyUri: from runtime.yaml, else a sane default on port 8080
                             def proxyUri    = "${runtime.proxyUri ?: 'http://0.0.0.0:8080'}"
-                            log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
+                            log('INFO', "  ${appName}: gateway=${gwKey} (${gw.name})  proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
 
                             def apiPolicies = (apiCfg.policies ?: []).collect { p ->
                                 resolvePolicy(p, POLICY_CATALOGUE, cfgPath)
@@ -307,6 +335,9 @@ pipeline {
                                 proxyUri      : proxyUri,
                                 runtimePath   : rtPath,
                                 configPath    : cfgPath,
+                                gatewayKey    : gwKey,
+                                flexTargetId  : gw.id,
+                                flexTargetName: gw.name,
                                 currentVersion: currentVersion,
                                 policies      : policies,
                                 release          : release,
@@ -642,7 +673,8 @@ pipeline {
                         def icon = r.status == 'OK' ? 'OK      ' : (r.status == 'DRY_RUN' ? 'DRY_RUN ' : 'FAILED  ')
                         def api  = (RELEASE_API_MAP[r.release] ?: []).find { it.instanceLabel == r.label }
                         def ver  = api?.FINAL_VERSION ?: '-'
-                        echo "  ${icon} | ${r.release} | ${r.label.padRight(32)} | instanceId=${r.instanceId} | config=${ver}"
+                        def gw   = api?.flexTargetName ?: '-'
+                        echo "  ${icon} | ${r.release} | ${r.label.padRight(32)} | gw=${gw} | instanceId=${r.instanceId} | config=${ver}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
                     def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
@@ -655,7 +687,7 @@ pipeline {
     }
 
     post {
-        success { echo "SUCCESS: all APIs deployed to ${env.FLEX_TARGET_NAME} (${params.ENVIRONMENT})" }
+        success { echo "SUCCESS: all APIs deployed to ${params.ENVIRONMENT}" }
         failure { echo "FAILURE: one or more deployments failed. correlationId=${env.CORRELATION_ID}" }
         always  { script { env.ANYPOINT_TOKEN = '' } }
     }
@@ -896,8 +928,8 @@ def deployInstance(String instanceId, Map api) {
     def deployJson = [
         type          : 'HY',
         gatewayVersion: env.GATEWAY_VERSION,
-        targetId      : env.FLEX_TARGET_ID,
-        targetName    : env.FLEX_TARGET_NAME,
+        targetId      : api.flexTargetId,
+        targetName    : api.flexTargetName,
         environmentId : env.ENV_ID
     ]
 
@@ -962,7 +994,7 @@ except: print('')
                 fi
             elif [ "\$HTTP" = "400" ]; then
                 if echo "\$BODY" | grep -q 'already in use\\|InvalidOperationError'; then
-                    echo "PORT CONFLICT on Flex Target ${env.FLEX_TARGET_NAME}: \$BODY\\nFix: assign a different proxyUri in envs/${api.appName}/${params.ENVIRONMENT}/runtime.yaml, or undeploy the conflicting API first." >&2
+                    echo "PORT CONFLICT on gateway ${api.flexTargetName}: \$BODY\\nFix: assign a different proxyUri in envs/${api.appName}/${params.ENVIRONMENT}/runtime.yaml, or undeploy the conflicting API first." >&2
                     exit 1
                 fi
                 sleep 10

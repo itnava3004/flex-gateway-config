@@ -5,23 +5,42 @@
 # How to find these values:
 #   organizationId  : Anypoint Platform → Access Management → Business Groups → your BG → "Group ID"
 #   environmentId   : Anypoint Platform → Access Management → Environments → click env → copy the ID from the URL
-#   flexTarget.id   : Runtime Manager → Flex Gateway → select your gateway → copy the ID from the URL
-#   flexTarget.name : the display name of your Flex Gateway instance in Runtime Manager
+#   gateways.<k>.id : Runtime Manager → Gateways → select the gateway → copy the ID from the URL
+#   gateways.<k>.name : the gateway's display name in Runtime Manager
+#
+# An environment may front SEVERAL gateways. Each API instance deploys to exactly
+# one of them; which one is chosen per app in envs/<app>/<env>/runtime.yaml via
+# `gateway: <key>`. Apps that do not name one fall back to defaultGateway.
 anypoint:
   baseUrl: https://anypoint.mulesoft.com
   organizationId: 70affe93-77af-4b6c-ad53-37e7a9bcda85
 
   environments:
+    dev:
+      environmentId: 0762c381-772f-437b-a39b-d857b7ecb310
+      gatewayVersion: "1.12.7"
+      defaultGateway: primary
+      gateways:
+        primary:
+          id:   2a0abcce-051d-4199-9d5a-0bd5ca47ed94
+          name: fxf-dev-gtwy
+        secondary:
+          id:   <<DEV_GATEWAY_2_ID>>
+          name: fxf-dev-gtwy-2
+
     sandbox:
       environmentId: 88969f26-b6fc-4c09-8c7a-70a652782d68
       gatewayVersion: "1.12.7"
-      flexTarget:
-        id:   ea610164-f3dc-4dcf-96e9-fc0a8cf95a68
-        name: demo-1
+      defaultGateway: primary
+      gateways:
+        primary:
+          id:   ea610164-f3dc-4dcf-96e9-fc0a8cf95a68
+          name: demo-1
 
     design:
       environmentId: 09dfbb02-0b2d-4bdf-a744-c4b5453a30f7
       gatewayVersion: "1.12.7"
+      # Single-gateway form is still accepted and maps to the key 'default'.
       flexTarget:
         id:   ea610164-f3dc-4dcf-96e9-fc0a8cf95a68
         name: demo-1

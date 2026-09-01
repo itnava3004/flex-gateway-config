@@ -7,6 +7,9 @@ env: qa
 # apis/<app>/config.yaml apiVersion to publish the working copy; set it to
 # an older published version to replay that version from Nexus instead.
 deployVersion: 1.0.0
+# Which gateway in this environment this API deploys to. Must match a key
+# under anypoint.yaml environments.<env>.gateways. Omit to use defaultGateway.
+# gateway: secondary
 
 publicHostname: qa-flex.fxf.example.com
 tlsCertName: fxf-qa-wildcard
