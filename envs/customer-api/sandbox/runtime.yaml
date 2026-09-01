@@ -7,9 +7,9 @@ env: sandbox
 # apis/<app>/config.yaml configVersion to publish the working copy; set it to
 # an older published version to replay that version from Nexus instead.
 deployVersion: 1.0.0
-# Which gateway in this environment this API deploys to. Must match a key
-# under anypoint.yaml environments.<env>.gateways. Omit to use defaultGateway.
-# gateway: fxf-dev-gtwy-2
+# Gateway this API deploys to in this environment. Required — must match a
+# key under anypoint.yaml environments.sandbox.gateways.
+gateway: demo-1
 
 # NOTE: the demo-1 Flex Gateway only exposes ports 8081 and 8082, so
 # payments-api and orders-api share 8082. Add a 0.0.0.0:8083 listener in

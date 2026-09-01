@@ -9,8 +9,8 @@
 #   gateways.<name>.id : select that gateway in Runtime Manager and copy the ID from the URL
 #
 # An environment may front SEVERAL gateways. Each API instance deploys to exactly
-# one of them; which one is chosen per app in envs/<app>/<env>/runtime.yaml via
-# `gateway: <name>`. Apps that do not name one fall back to defaultGateway.
+# one of them, named explicitly per app in envs/<app>/<env>/runtime.yaml via
+# `gateway:`. There is no default — the deployment target is always stated.
 anypoint:
   baseUrl: https://anypoint.mulesoft.com
   organizationId: 70affe93-77af-4b6c-ad53-37e7a9bcda85
@@ -19,20 +19,46 @@ anypoint:
     dev:
       environmentId: 0762c381-772f-437b-a39b-d857b7ecb310
       gatewayVersion: "1.12.7"
-      defaultGateway: fxf-dev-gtwy
       gateways:
         fxf-dev-gtwy:
           id: 2a0abcce-051d-4199-9d5a-0bd5ca47ed94
         fxf-dev-gtwy-2:
           id: <<DEV_GATEWAY_2_ID>>
 
+    test:
+      environmentId: <<TEST_ENVIRONMENT_ID>>
+      gatewayVersion: "1.12.7"
+      gateways:
+        fxf-test-gtwy:
+          id: <<TEST_GATEWAY_ID>>
+
+    qa:
+      environmentId: <<QA_ENVIRONMENT_ID>>
+      gatewayVersion: "1.12.7"
+      gateways:
+        fxf-qa-gtwy:
+          id: <<QA_GATEWAY_ID>>
+
     sandbox:
       environmentId: 88969f26-b6fc-4c09-8c7a-70a652782d68
       gatewayVersion: "1.12.7"
-      defaultGateway: demo-1
       gateways:
         demo-1:
           id: ea610164-f3dc-4dcf-96e9-fc0a8cf95a68
+
+    preprod:
+      environmentId: <<PREPROD_ENVIRONMENT_ID>>
+      gatewayVersion: "1.12.7"
+      gateways:
+        fxf-preprod-gtwy:
+          id: <<PREPROD_GATEWAY_ID>>
+
+    prod:
+      environmentId: <<PROD_ENVIRONMENT_ID>>
+      gatewayVersion: "1.12.7"
+      gateways:
+        fxf-prod-gtwy:
+          id: <<PROD_GATEWAY_ID>>
 
     design:
       environmentId: 09dfbb02-0b2d-4bdf-a744-c4b5453a30f7

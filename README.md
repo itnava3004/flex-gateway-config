@@ -146,7 +146,7 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 |---|---|
 | `app`, `env` | Restate the file's own location. Validated against the path — a copied file that still names its source app or environment fails the build. |
 | `deployVersion` | The config-contract version this environment deploys (see Config Versioning). |
-| `gateway` | Which gateway in this environment to deploy to. Omit to use `defaultGateway`. |
+| `gateway` | Which gateway in this environment to deploy to. Required. |
 | `proxyUri` | The listener the API instance binds to. |
 | `upstreamHost` | The backend host every route forwards to. |
 | `endpoints` | Optional per-environment path overrides. |
@@ -176,7 +176,6 @@ environments:
   dev:
     environmentId: 0762c381-...
     gatewayVersion: "1.12.7"
-    defaultGateway: fxf-dev-gtwy
     gateways:
       fxf-dev-gtwy:
         id: 2a0abcce-...
@@ -186,15 +185,17 @@ environments:
 
 The key is the gateway's name in Runtime Manager; the only value it carries is the target `id`.
 
-An API instance deploys to **exactly one** gateway. Which one is chosen per app, in
-that environment's `runtime.yaml`:
+An API instance deploys to **exactly one** gateway, named explicitly per app in that
+environment's `runtime.yaml`:
 
 ```yaml
-gateway: fxf-dev-gtwy-2   # omit to use defaultGateway
+gateway: fxf-dev-gtwy-2
 ```
 
-Naming a gateway that is not declared for the environment fails the build and lists
-what is available, rather than deploying to the wrong target.
+This is **required** — there is no default. An API with no `gateway:` fails the build
+rather than inheriting a target, so the deployment destination is always stated in
+the file rather than implied. Naming a gateway not declared for the environment fails
+the same way, listing what is available.
 
 Because the choice lives in `runtime.yaml`, the same application can sit on different
 gateways in different environments — split across two in dev, on a single gateway in

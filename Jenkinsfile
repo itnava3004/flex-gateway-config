@@ -143,12 +143,7 @@ pipeline {
                     if (!GATEWAYS) {
                         error "No gateways defined for environment '${params.ENVIRONMENT}' in anypoint.yaml — add a gateways: map keyed by gateway name"
                     }
-                    def DEFAULT_GATEWAY = "${envBlock.defaultGateway ?: GATEWAYS.keySet().first()}"
-                    if (!GATEWAYS.containsKey(DEFAULT_GATEWAY)) {
-                        error "defaultGateway '${DEFAULT_GATEWAY}' for environment '${params.ENVIRONMENT}' is not in gateways: (${GATEWAYS.keySet().join(', ')})"
-                    }
-
-                    log('INFO', "Target: env=${params.ENVIRONMENT} gateways=[${GATEWAYS.keySet().join(', ')}] default=${DEFAULT_GATEWAY}")
+                    log('INFO', "Target: env=${params.ENVIRONMENT} gateways=[${GATEWAYS.keySet().join(', ')}]")
 
                     // ── Determine releases ────────────────────────────────────────
                     def releaseInput = params.RELEASE?.trim()?.toUpperCase() ?: 'R1'
@@ -264,7 +259,13 @@ pipeline {
                                 error "deployVersion missing from ${rtPath} — it declares which config version ${params.ENVIRONMENT} deploys"
                             }
                             // Which gateway in this environment does this API deploy to?
-                            def gwName = "${runtime.gateway ?: DEFAULT_GATEWAY}"
+                            // Required: the deployment target is always stated, never
+                            // inherited. A missing gateway would otherwise silently send an
+                            // API to whichever gateway happened to be first.
+                            if (!runtime.gateway) {
+                                error "gateway missing from ${rtPath} — name the gateway this API deploys to (one of: ${GATEWAYS.keySet().join(', ')})"
+                            }
+                            def gwName = "${runtime.gateway}"
                             def gwId   = GATEWAYS[gwName]
                             if (!gwId) {
                                 error "${rtPath} names gateway '${gwName}', which is not defined for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${GATEWAYS.keySet().join(', ')})"

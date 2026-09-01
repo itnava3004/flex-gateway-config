@@ -7,9 +7,9 @@ env: test
 # apis/<app>/config.yaml configVersion to publish the working copy; set it to
 # an older published version to replay that version from Nexus instead.
 deployVersion: 1.0.0
-# Which gateway in this environment this API deploys to. Must match a key
-# under anypoint.yaml environments.<env>.gateways. Omit to use defaultGateway.
-# gateway: fxf-dev-gtwy-2
+# Gateway this API deploys to in this environment. Required — must match a
+# key under anypoint.yaml environments.test.gateways.
+gateway: fxf-test-gtwy
 
 proxyUri: http://0.0.0.0:8082
 
