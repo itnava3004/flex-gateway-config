@@ -12,6 +12,6 @@
 assetId: fxf-custom-header
 policyVersion: "1.0.0"
 groupId: "<<FXF_ORG_GROUP_ID>>"
-defaults:
+config:
   headers:
     X-FXF-Source: flex-gateway

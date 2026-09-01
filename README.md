@@ -83,30 +83,30 @@ Full details in [`inventory/api-inventory.yaml`](inventory/api-inventory.yaml).
 
 ## Policies
 
-Each policy is defined once in `policies/<policy>.yaml` — `assetId`, `policyVersion`, `groupId` and its `defaults`:
+Each policy is defined once in `policies/<policy>.yaml` — `assetId`, `policyVersion`, `groupId` and its baseline `config`:
 
 ```yaml
 assetId: ip-allowlist
 policyVersion: "1.1.2"
 groupId: "68ef9520-..."
-defaults:
+config:
   ipExpression: "#[attributes.headers['x-forwarded-for']]"
   ips: []
 ```
 
-`apis/<app>/config.yaml` carries **references only** — never the definition. `policies:` is a map keyed by policy name. Give a policy a value to layer API-specific settings over its defaults; leave it empty to take the defaults unchanged:
+`apis/<app>/config.yaml` carries **references only** — never the definition. `policies:` is a map keyed by policy name. Give a policy a value to layer API-specific settings over that baseline; leave it empty to take it unchanged:
 
 ```yaml
 policies:
-  client-id-enforcement:           # defaults, unchanged
-  ip-allowlist:                    # defaults + this API's CIDR ranges
+  client-id-enforcement:           # baseline, unchanged
+  ip-allowlist:                    # baseline + this API's CIDR ranges
     ips:
       - 10.40.0.0/16
 ```
 
 The order the policies appear in is the order they are applied.
 
-Only the keys you supply are overridden; everything else falls through to the policy file. A `policyVersion` bump is therefore a one-line change in `policies/`, not an edit across every API that uses it.
+Only the keys you supply are overridden; everything else falls through to the policy file's `config`. A `policyVersion` bump is therefore a one-line change in `policies/`, not an edit across every API that uses it.
 
 The catalogue is indexed by `assetId`, **not** filename — `policies/rate-limiting-sla.yaml` declares `assetId: rate-limiting`, so that is what config.yaml references. Referencing a policy that is not in `policies/` fails the build and lists what is available.
 

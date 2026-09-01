@@ -1,7 +1,7 @@
 # Policy template: Rate Limiting SLA
 # SLA-based rate limiting tied to the client application's SLA tier.
 # The maximumRequests / timePeriodInMilliseconds values below are the
-# FXF defaults — override per API in apis/{app}/config.yaml as needed.
+# FXF baseline — override per API in apis/{app}/config.yaml as needed.
 #
 # Usage in apis/{app}/config.yaml — reference only:
 #   policies:
@@ -13,7 +13,7 @@
 assetId: rate-limiting
 policyVersion: "1.5.1"
 groupId: "68ef9520-24e9-4cf2-b2f5-620025690913"
-defaults:
+config:
   rateLimits:
     - maximumRequests: 50
       timePeriodInMilliseconds: 1000

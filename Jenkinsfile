@@ -181,7 +181,7 @@ pipeline {
                             assetId      : "${pol.assetId}",
                             groupId      : "${pol.groupId ?: env.MULESOFT_POLICY_GROUP}",
                             policyVersion: "${pol.policyVersion}",
-                            defaults     : pol.defaults ?: [:],
+                            config       : pol.config ?: pol.defaults ?: [:],
                             source       : "${f.path}"
                         ]
                     }
@@ -1299,7 +1299,7 @@ def nexusArtifactUrl(Map api) {
 // A reference is either a bare name:
 //     policies:
 //       - client-id-enforcement
-// or a name plus API-specific values layered over the catalogue defaults:
+// or a name plus API-specific values layered over the policy's own config:
 //     policies:
 //       - ref: ip-allowlist
 //         config:
@@ -1309,7 +1309,7 @@ def nexusArtifactUrl(Map api) {
 // they are never restated in config.yaml, so a version bump happens in one place.
 def resolvePolicies(Object policies, Map catalogue, String sourcePath) {
     // policies: is a map keyed by policy name; the value is the API-specific
-    // overrides, or empty to take the catalogue defaults unchanged:
+    // overrides, or empty to take the policy's own config unchanged:
     //
     //     policies:
     //       client-id-enforcement:
@@ -1341,9 +1341,9 @@ def resolvePolicies(Object policies, Map catalogue, String sourcePath) {
         if (!cat) {
             error "Policy '${en.name}' referenced in ${sourcePath} is not defined in policies/. Available: ${catalogue.keySet().join(', ')}"
         }
-        // API-specific values win over the catalogue defaults, key by key
+        // API-specific values win over the policy's own config, key by key
         def merged = [:]
-        (cat.defaults ?: [:]).each { k, v -> merged["${k}"] = v }
+        (cat.config ?: [:]).each { k, v -> merged["${k}"] = v }
         en.overrides.each { k, v -> merged["${k}"] = v }
         [assetId      : cat.assetId,
          groupId      : cat.groupId,
