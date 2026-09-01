@@ -216,10 +216,10 @@ Two fields work together:
 
 | Field | File | Meaning |
 |---|---|---|
-| `apiVersion` | `apis/<app>/config.yaml` | The **current** version of this API's config contract. Bump it when you change `config.yaml`. |
+| `configVersion` | `apis/<app>/config.yaml` | The **current** version of this API's config contract. Bump it when you change `config.yaml`. |
 | `deployVersion` | `envs/<app>/<env>/runtime.yaml` | The version **that environment deploys**. |
 
-Both are separate from `config.yaml`'s `version:`, which is the Exchange asset version.
+Both are separate from `config.yaml`'s `exchangeVersion:`, which is the Exchange asset version.
 
 The pipeline compares them per API:
 
@@ -230,7 +230,7 @@ Because the artifact version always comes from `config.yaml`, a given version nu
 
 `runtime.yaml` itself is never replayed — environment wiring (`proxyUri`, `publicHostname`, endpoint backend URIs) always comes from the current Git checkout. Only the contract is pinned.
 
-**Promoting** new config to an environment is therefore a one-line, reviewable commit: set that environment's `deployVersion` to the new `apiVersion`. **Rolling back** is the same edit in reverse — point `deployVersion` at the previous version and re-run; the old contract comes back from Nexus without touching `config.yaml`.
+**Promoting** new config to an environment is therefore a one-line, reviewable commit: set that environment's `deployVersion` to the new `configVersion`. **Rolling back** is the same edit in reverse — point `deployVersion` at the previous version and re-run; the old contract comes back from Nexus without touching `config.yaml`.
 
 At deploy time the pipeline applies an environment suffix, following the same scheme as the eapi application pipeline:
 
@@ -242,7 +242,7 @@ At deploy time the pipeline applies an environment suffix, following the same sc
 
 Two stages use it:
 
-- **Resolve Config Version (Check Nexus)** runs before the approval gate. In publish mode, if the version already exists in a *release* repo the build fails with "bump apiVersion" — a released config version is never overwritten. Snapshots may be overwritten freely. Skipped for a pinned replay, whose existence is already proven by the download.
+- **Resolve Config Version (Check Nexus)** runs before the approval gate. In publish mode, if the version already exists in a *release* repo the build fails with "bump deployVersion" — a released config version is never overwritten. Snapshots may be overwritten freely. Skipped for a pinned replay, whose existence is already proven by the download.
 - **Archive Config to Nexus** runs after a successful deploy. For each API that deployed OK in publish mode it zips `apis/<app>/config.yaml` plus that environment's `runtime.yaml` and uploads it as `<app>-<version>.zip`. A pinned replay is not re-archived — that version is already published.
 
 In publish mode Git is the deploy source and Nexus is the record. In replay mode Nexus is the source of the contract, which is what makes a pinned rollback possible without editing `config.yaml`.

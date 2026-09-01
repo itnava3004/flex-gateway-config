@@ -72,7 +72,7 @@ pipeline {
 
         // ── Nexus config-artifact versioning (names mirror the eapi reference) ──
         // Only the repo-wide values live here; versions are per-API AND per-env
-        // (each runtime.yaml carries its own apiVersion) so those sit on the api map.
+        // (each runtime.yaml carries its own deployVersion) so those sit on the api map.
         EAI_NUMBER            = '3541669'
         APP_GROUP             = 'gateway-config'
         NEXUS_CREDS_ID        = '3541669_nexus'
@@ -248,7 +248,7 @@ pipeline {
                             }
 
                             // ── Which config version does this environment deploy? ──
-                            // config.yaml apiVersion  = the CURRENT version of the contract
+                            // config.yaml configVersion = the CURRENT version of the contract
                             // runtime.yaml deployVersion = the version THIS env is pinned to
                             //
                             // Equal  -> publish mode: deploy the working-copy config.yaml and
@@ -257,8 +257,8 @@ pipeline {
                             //           Nexus, so fetch that artifact and deploy its
                             //           config.yaml instead of the working copy. Nothing is
                             //           re-archived, since that version is already published.
-                            if (!apiCfg.apiVersion) {
-                                error "apiVersion missing from ${cfgPath} — it declares the current version of this config contract"
+                            if (!apiCfg.configVersion) {
+                                error "configVersion missing from ${cfgPath} — it declares the current version of this config contract"
                             }
                             if (!runtime.deployVersion) {
                                 error "deployVersion missing from ${rtPath} — it declares which config version ${params.ENVIRONMENT} deploys"
@@ -270,7 +270,7 @@ pipeline {
                                 error "${rtPath} names gateway '${gwName}', which is not defined for environment '${params.ENVIRONMENT}' in anypoint.yaml (available: ${GATEWAYS.keySet().join(', ')})"
                             }
 
-                            def currentVersion = "${apiCfg.apiVersion}"
+                            def currentVersion = "${apiCfg.configVersion}"
                             def deployVersion  = "${runtime.deployVersion}"
                             def coords         = nexusCoords(deployVersion, "${appName}")
                             def pinned         = (deployVersion != currentVersion)
@@ -353,7 +353,7 @@ pipeline {
                             apiList << ([
                                 appName       : "${appName}",
                                 assetId       : "${apiCfg.assetId}",
-                                assetVersion  : "${apiCfg.version}",
+                                assetVersion  : "${apiCfg.exchangeVersion}",
                                 instanceLabel : "${appName}-${params.ENVIRONMENT}",
                                 upstreamUri   : upstreamUri,
                                 proxyUri      : proxyUri,
@@ -433,7 +433,7 @@ pipeline {
                             }
                         }
                         if (duplicates) {
-                            error "Config artifact(s) already published to Nexus release repo: ${duplicates.join(', ')}. Bump apiVersion in the corresponding envs/<app>/${params.ENVIRONMENT}/runtime.yaml."
+                            error "Config artifact(s) already published to Nexus release repo: ${duplicates.join(', ')}. Bump deployVersion in the corresponding envs/<app>/${params.ENVIRONMENT}/runtime.yaml."
                         }
                     }
                 }
@@ -1204,14 +1204,14 @@ def apiCall(String method, String url, String bodyFile) {
 
 // Nexus coordinates for one API's config artifact. Field names mirror the eapi
 // reference pipeline; because versioning here is per-API and per-environment
-// (each runtime.yaml has its own apiVersion) these live on the api map rather
+// (each runtime.yaml has its own deployVersion) these live on the api map rather
 // than as single env.* values.
 //
-// Version = runtime.yaml apiVersion + an environment-driven suffix:
+// Version = runtime.yaml deployVersion + an environment-driven suffix:
 //   dev / test / sandbox / design -> -SNAPSHOT
 //   qa                            -> -RC
 //   preprod / prod                -> no suffix
-def nexusCoords(String apiVersionBase, String appName) {
+def nexusCoords(String deployVersionBase, String appName) {
     def envKey = params.ENVIRONMENT.toLowerCase()
     String requiredSuffix
     if (envKey in ['dev', 'test', 'sandbox', 'design']) {
@@ -1223,13 +1223,13 @@ def nexusCoords(String apiVersionBase, String appName) {
     }
 
     // Strip any suffix already present, then apply the one this env requires
-    def baseVersion  = apiVersionBase.replaceAll(/(-SNAPSHOT|-RC)$/, '')
+    def baseVersion  = deployVersionBase.replaceAll(/(-SNAPSHOT|-RC)$/, '')
     def finalVersion = baseVersion + requiredSuffix
     def releaseFlag  = !finalVersion.endsWith('-SNAPSHOT')
     def nexusGroup   = "eai${env.EAI_NUMBER}.${env.APP_GROUP}"
 
     return [
-        API_VERSION      : baseVersion,
+        BASE_VERSION     : baseVersion,
         EFFECTIVE_VERSION: finalVersion,
         NEXUS_VERSION    : finalVersion,
         FINAL_VERSION    : finalVersion,
@@ -1268,7 +1268,7 @@ def fetchPinnedConfig(String appName, Map coords) {
                     ;;
                 404)
                     echo "Pinned config version ${coords.FINAL_VERSION} for ${appName} is not in Nexus (HTTP 404)." >&2
-                    echo "deployVersion in the runtime.yaml points at a version that was never published. Set it to a version that exists, or to the current apiVersion to publish afresh." >&2
+                    echo "deployVersion in the runtime.yaml points at a version that was never published. Set it to a version that exists, or to the current configVersion to publish afresh." >&2
                     exit 1 ;;
                 000)
                     echo "Nexus unreachable (HTTP 000) fetching ${url}." >&2

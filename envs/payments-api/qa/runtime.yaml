@@ -4,7 +4,7 @@
 app: payments-api
 env: qa
 # Config-contract version this environment deploys. Set it equal to
-# apis/<app>/config.yaml apiVersion to publish the working copy; set it to
+# apis/<app>/config.yaml configVersion to publish the working copy; set it to
 # an older published version to replay that version from Nexus instead.
 deployVersion: 1.0.0
 # Which gateway in this environment this API deploys to. Must match a key

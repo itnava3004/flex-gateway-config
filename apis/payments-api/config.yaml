@@ -3,8 +3,8 @@
 # envs/<app>/<env>/runtime.yaml.
 app: payments-api
 assetId: payments-api
-version: 2.0.0         # Exchange asset version
-apiVersion: 1.0.0      # current version of this config contract
+exchangeVersion: 2.0.0   # Exchange asset version
+configVersion:   1.0.0   # current version of this config contract
 
 # Route rules. methods and headers are optional and constrain which requests
 # match the route in API Manager; omit them to match on path alone.
