@@ -1,6 +1,0 @@
-# Wave R2 manifest — second migration wave (Jan – Feb 2027).
-# APIs: Customer domain.
-wave: R2
-description: "Wave 2 — Customer"
-apps:
-  - customer-api

@@ -1,0 +1,6 @@
+# Release R4 manifest — fourth migration release (Apr – Jun 2027).
+# Populated after API inventory & discovery phase (Aug–Sep 2026).
+release: R4
+description: "Release 4 — TBD after Discovery"
+apps:
+  - payments-api

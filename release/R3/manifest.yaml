@@ -1,0 +1,5 @@
+# Release R3 manifest — third migration release (Feb – Apr 2027).
+# Populated after API inventory & discovery phase (Aug–Sep 2026).
+release: R3
+description: "Release 3 — TBD after Discovery"
+apps: []

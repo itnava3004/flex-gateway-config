@@ -3,15 +3,12 @@
 # This is a custom policy published to the FXF org's Exchange under the
 # group ID below (not the MuleSoft-owned group).
 #
-# Usage in apis/{app}/config.yaml:
+# Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - assetId: fxf-custom-header
-#       policyVersion: "1.0.0"
-#       groupId: "<<FXF_ORG_GROUP_ID>>"
+#     - ref: fxf-custom-header
 #       config:
 #         headers:
-#           X-FXF-Source: flex-gateway
-#           X-FXF-Environment: "${env}"
+#           X-FXF-Environment: dev
 
 assetId: fxf-custom-header
 policyVersion: "1.0.0"

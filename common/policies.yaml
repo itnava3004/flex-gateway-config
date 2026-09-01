@@ -1,14 +1,13 @@
-# Common policies applied to every API in every wave.
+# Policies applied to every API in every release.
 #
-# Rules:
-#   - Each policy here is applied to ALL APIs automatically.
-#   - If an API declares the same assetId in its own apis/<name>/config.yaml,
-#     that API-specific definition wins (it overrides the common one).
-#   - To add a policy only to specific APIs, put it in apis/<name>/config.yaml instead.
+# References only — the full definition of each policy lives in
+# policies/<policy>.yaml. A bare name uses that file's defaults; use
+# `ref:` with `config:` to layer values over them.
 #
+# If an API declares the same policy in apis/<name>/config.yaml, the
+# API-specific entry wins and the common one is not applied twice.
 policies:
-  - assetId: rate-limiting
-    policyVersion: "1.5.1"
+  - ref: rate-limiting
     config:
       rateLimits:
         - maximumRequests: 100

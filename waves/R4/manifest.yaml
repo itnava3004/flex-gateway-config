@@ -1,6 +1,0 @@
-# Wave R4 manifest — fourth migration wave (Apr – Jun 2027).
-# Populated after API inventory & discovery phase (Aug–Sep 2026).
-wave: R4
-description: "Wave 4 — TBD after Discovery"
-apps:
-  - payments-api

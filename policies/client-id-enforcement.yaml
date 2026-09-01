@@ -2,14 +2,9 @@
 # Validates client_id / client_secret headers against the Anypoint Client Store.
 # This is the standard auth pattern for all FXF Flex Gateway APIs.
 #
-# Usage in apis/{app}/config.yaml:
+# Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - assetId: client-id-enforcement
-#       policyVersion: "1.3.3"
-#       config:
-#         credentialsOriginHasHttpBasicAuthenticationHeader: customExpression
-#         clientIdExpression: "#[attributes.headers['client_id']]"
-#         clientSecretExpression: "#[attributes.headers['client_secret']]"
+#     - client-id-enforcement
 
 assetId: client-id-enforcement
 policyVersion: "1.3.3"

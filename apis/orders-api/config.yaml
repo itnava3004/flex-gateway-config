@@ -5,35 +5,46 @@ app: orders-api
 assetId: orders-api
 version: 1.0.0         # Exchange asset version
 apiVersion: 1.0.0      # current version of this config contract
+
+# Route rules. methods and headers are optional and constrain which requests
+# match the route in API Manager; omit them to match on path alone.
 endpoints:
   - name: orders-cancel
     publicPath: /orders/v1/cancel
+    methods: [POST]
+    headers:
+      X-FXF-Channel: internal
     authPattern: client-id-enforcement
   - name: orders-create
     publicPath: /orders/v1/create
+    methods: [POST]
+    headers:
+      X-FXF-Channel: internal
     authPattern: client-id-enforcement
   - name: orders-list
     publicPath: /orders/v1/list
+    methods: [GET]
+    headers:
+      X-FXF-Channel: internal
     authPattern: client-id-enforcement
   - name: orders-track
     publicPath: /orders/v1/track
+    methods: [GET]
+    headers:
+      X-FXF-Channel: internal
     authPattern: client-id-enforcement
+
+# Policy references only. assetId, policyVersion, groupId and the default
+# config live in policies/<policy>.yaml — a bare name uses those defaults,
+# and `config:` layers API-specific values over them.
 policies:
-  - assetId: client-id-enforcement
-    policyVersion: "1.3.3"
-    config:
-      credentialsOriginHasHttpBasicAuthenticationHeader: customExpression
-      clientIdExpression: "#[attributes.headers['client_id']]"
-      clientSecretExpression: "#[attributes.headers['client_secret']]"
-  - assetId: ip-allowlist
-    policyVersion: "1.1.2"
-    config:
-      ipExpression: "#[attributes.headers['x-forwarded-for']]"
-      ips:
-        - 10.30.0.0/16
-  - assetId: rate-limiting
-    policyVersion: "1.5.1"
+  - client-id-enforcement
+  - ref: rate-limiting
     config:
       rateLimits:
         - maximumRequests: 100
           timePeriodInMilliseconds: 1000
+  - ref: ip-allowlist
+    config:
+      ips:
+        - 10.30.0.0/16

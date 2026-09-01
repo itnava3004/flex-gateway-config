@@ -1,0 +1,7 @@
+# Release R1 manifest — first migration release (Dec 2026 – Jan 2027).
+# APIs: Payments + Orders (highest-volume, highest-priority Prod APIs).
+release: R1
+description: "Release 1 — Payments & Orders"
+apps:
+  - payments-api
+  - orders-api

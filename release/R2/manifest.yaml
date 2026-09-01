@@ -1,0 +1,6 @@
+# Release R2 manifest — second migration release (Jan – Feb 2027).
+# APIs: Customer domain.
+release: R2
+description: "Release 2 — Customer"
+apps:
+  - customer-api

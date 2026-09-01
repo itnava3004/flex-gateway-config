@@ -3,12 +3,10 @@
 # The ips list below is a placeholder — each API specifies its own CIDR ranges.
 # Typically used to limit access to FXF internal network subnets only.
 #
-# Usage in apis/{app}/config.yaml:
+# Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - assetId: ip-allowlist
-#       policyVersion: "1.1.2"
+#     - ref: ip-allowlist
 #       config:
-#         ipExpression: "#[attributes.headers['x-forwarded-for']]"
 #         ips:
 #           - 10.0.0.0/8
 

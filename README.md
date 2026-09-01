@@ -26,7 +26,7 @@ eai-3541669-flex-gateway-config/
 │   ├── client-id-enforcement.yaml
 │   ├── rate-limiting-sla.yaml
 │   └── fxf-custom-header.yaml
-├── waves/                         # Release wave manifests
+├── release/                       # Release manifests
 │   ├── R1/manifest.yaml
 │   └── R2/manifest.yaml
 ├── inventory/
@@ -61,7 +61,7 @@ src/deploy/validate.sh
 ```bash
 chmod +x src/deploy/deploy.sh
 src/deploy/deploy.sh dev        # Deploy all active APIs to dev
-src/deploy/deploy.sh qa R1      # Deploy only Wave R1 APIs to qa
+src/deploy/deploy.sh qa R1      # Deploy only Release R1 APIs to qa
 ```
 
 ### 3. Deploy for real (requires `flexctl` configured with credentials)
@@ -71,7 +71,7 @@ Set `DRY_RUN=false` in the Jenkins pipeline or remove the dry-run guard in `depl
 
 ## API Inventory
 
-| API | Wave | Status | Base Path |
+| API | Release | Status | Base Path |
 |-----|------|--------|-----------|
 | customer-api | R1 | active | `/customer/v1` |
 | payments-api | R1 | active | `/payments/v1` |
@@ -81,13 +81,59 @@ Full details in [`inventory/api-inventory.yaml`](inventory/api-inventory.yaml).
 
 ---
 
-## Policies Applied to All APIs
+## Policies
+
+Each policy is defined once in `policies/<policy>.yaml` — `assetId`, `policyVersion`, `groupId` and its `defaults`:
+
+```yaml
+assetId: ip-allowlist
+policyVersion: "1.1.2"
+groupId: "68ef9520-..."
+defaults:
+  ipExpression: "#[attributes.headers['x-forwarded-for']]"
+  ips: []
+```
+
+`apis/<app>/config.yaml` carries **references only** — never the definition. A bare name uses the defaults as-is; `ref:` with `config:` layers API-specific values over them:
+
+```yaml
+policies:
+  - client-id-enforcement          # defaults, unchanged
+  - ref: ip-allowlist              # defaults + this API's CIDR ranges
+    config:
+      ips:
+        - 10.40.0.0/16
+```
+
+Only the keys you supply are overridden; everything else falls through to the policy file. A `policyVersion` bump is therefore a one-line change in `policies/`, not an edit across every API that uses it.
+
+The catalogue is indexed by `assetId`, **not** filename — `policies/rate-limiting-sla.yaml` declares `assetId: rate-limiting`, so that is what config.yaml references. Referencing a policy that is not in `policies/` fails the build and lists what is available.
+
+`common/policies.yaml` uses the same reference form and applies to every API, unless that API declares the same policy itself — in which case the API's entry wins.
 
 | Policy | Purpose |
 |--------|---------|
 | `client-id-enforcement` | Validates `client_id` / `client_secret` headers |
-| `rate-limiting-sla` | Per-client request rate limiting per SLA tier |
-| `fxf-custom-header` | Injects `X-Correlation-ID` and EAI tracing headers |
+| `rate-limiting` | Per-client request rate limiting |
+| `ip-allowlist` | Restricts access to trusted CIDR blocks |
+| `fxf-custom-header` | Injects FXF internal tracing headers |
+
+---
+
+## Route Rules
+
+Endpoints may constrain which requests match a route, beyond the path:
+
+```yaml
+endpoints:
+  - name: customer-consent
+    publicPath: /customer/v1/consent
+    methods: [GET, POST]
+    headers:
+      X-FXF-Channel: internal
+```
+
+`methods` and `headers` are both optional. Omit them and the route matches on path alone. The pipeline sends `methods` to API Manager as a pipe-separated string (`GET|POST`) and `headers` as a name/value map, alongside the path rule.
 
 ---
 
@@ -183,7 +229,7 @@ Note that edit rights on a folder config file are folder-Configure, not Jenkins-
 1. Branch from `main` — use naming: `feature/EAI-XXXX-description`
 2. Run `src/deploy/validate.sh` locally before raising a PR
 3. All YAML must pass validation in the Jenkins `Validate YAML` stage
-4. Tag the PR with the relevant wave (`R1` / `R2`)
+4. Tag the PR with the relevant release (`R1` / `R2`)
 
 ---
 

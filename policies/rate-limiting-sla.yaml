@@ -3,10 +3,9 @@
 # The maximumRequests / timePeriodInMilliseconds values below are the
 # FXF defaults — override per API in apis/{app}/config.yaml as needed.
 #
-# Usage in apis/{app}/config.yaml:
+# Usage in apis/{app}/config.yaml — reference only:
 #   policies:
-#     - assetId: rate-limiting
-#       policyVersion: "1.5.1"
+#     - ref: rate-limiting
 #       config:
 #         rateLimits:
 #           - maximumRequests: 50

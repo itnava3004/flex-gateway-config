@@ -1,16 +1,16 @@
 // =============================================================================
-// Jenkinsfile — Wave-based deploy to Anypoint Flex Gateway
+// Jenkinsfile — Release-based deploy to Anypoint Flex Gateway
 //               Driven by flex-gateway-config repo (GitOps)
 // -----------------------------------------------------------------------------
 // Flow:
 //   1. Checkout flex-gateway-config repo (or the repo this Jenkinsfile lives in)
 //   2. Read anypoint.yaml → resolve orgId, envId, flexTarget for chosen ENVIRONMENT
-//   3. Read waves/<WAVE>/manifest.yaml → list of apps to deploy
+//   3. Read release/<RELEASE>/manifest.yaml → list of apps to deploy
 //   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
 //   5. Resolve each API's Nexus config version; fail on a duplicate release
 //   6. Approval gate for test/qa/preprod/prod (skipped for dev/sandbox + DRY_RUN)
 //   7. Authenticate via Connected App (client_credentials)
-//   8. Deploy each wave in order:
+//   8. Deploy each release in order:
 //        find-or-create instance → deploy → apply policies → validate
 //   9. Archive the deployed config to Nexus (traceability / rollback)
 //  10. Print summary; fail build if any API failed
@@ -38,12 +38,12 @@ pipeline {
         choice(name: 'ENVIRONMENT',
                choices: ['dev', 'test', 'qa', 'preprod', 'prod','sandbox'],
                description: 'Target Anypoint environment')
-        string(name: 'WAVE',
+        string(name: 'RELEASE',
                defaultValue: 'R1',
-               description: 'Wave to run: R1, R2, R3, R4, or ALL. Case-insensitive.')
+               description: 'Release to run: R1, R2, R3, R4, or ALL. Case-insensitive.')
         string(name: 'APP_FILTER',
                defaultValue: '',
-               description: 'Optional: comma/space-separated app names to limit within the wave (e.g. "payments-api,orders-api"). Blank = all apps in the wave.')
+               description: 'Optional: comma/space-separated app names to limit within the release (e.g. "payments-api,orders-api"). Blank = all apps in the release.')
         booleanParam(name: 'DRY_RUN',
                defaultValue: true,
                description: 'Print the deployment plan without calling Anypoint APIs. Default true — set false to actually deploy.')
@@ -128,45 +128,60 @@ pipeline {
 
                     log('INFO', "Target: env=${params.ENVIRONMENT} flexTarget=${env.FLEX_TARGET_NAME}")
 
-                    // ── Determine waves ────────────────────────────────────────
-                    def waveInput = params.WAVE?.trim()?.toUpperCase() ?: 'R1'
-                    def wavesToRun = waveInput == 'ALL'
-                        ? ['R1', 'R2', 'R3', 'R4'].findAll { fileExists("waves/${it}/manifest.yaml") }
-                        : [waveInput]
-                    log('INFO', "Waves to run: ${wavesToRun.join(', ')}")
+                    // ── Determine releases ────────────────────────────────────────
+                    def releaseInput = params.RELEASE?.trim()?.toUpperCase() ?: 'R1'
+                    def releasesToRun = releaseInput == 'ALL'
+                        ? ['R1', 'R2', 'R3', 'R4'].findAll { fileExists("release/${it}/manifest.yaml") }
+                        : [releaseInput]
+                    log('INFO', "Releases to run: ${releasesToRun.join(', ')}")
 
                     // ── Optional app-level filter ──────────────────────────────
                     def appFilter = params.APP_FILTER?.trim()
                         ? params.APP_FILTER.split('[,\\s]+').collect { it.trim() }.findAll { it }
                         : []
 
-                    // ── Build wave → api-list map ──────────────────────────────
-                    // Policy asset-id normalisation: use config.yaml's assetId directly.
-                    // rate-limiting (simple, uses rateLimits[]) != rate-limiting-sla (SLA-tier).
-                    def POLICY_ID_NORM = [:]
+                    // ── Policy catalogue ───────────────────────────────────────
+                    // The full definition of each policy (assetId, policyVersion,
+                    // groupId, default config) lives in policies/*.yaml. config.yaml
+                    // carries only a reference, so a version bump is made once here
+                    // rather than in every API that uses the policy.
+                    //
+                    // Indexed by assetId, not filename — policies/rate-limiting-sla.yaml
+                    // declares assetId 'rate-limiting', and the filename is not the key.
+                    def POLICY_CATALOGUE = [:]
+                    (findFiles(glob: 'policies/*.yaml') ?: []).each { f ->
+                        def pol = readYaml file: f.path
+                        if (!pol?.assetId) {
+                            log('WARN', "${f.path}: no assetId — skipping")
+                            return
+                        }
+                        POLICY_CATALOGUE["${pol.assetId}"] = [
+                            assetId      : "${pol.assetId}",
+                            groupId      : "${pol.groupId ?: env.MULESOFT_POLICY_GROUP}",
+                            policyVersion: "${pol.policyVersion}",
+                            defaults     : pol.defaults ?: [:],
+                            source       : "${f.path}"
+                        ]
+                    }
+                    log('INFO', "Policy catalogue: ${POLICY_CATALOGUE.keySet().join(', ')}")
 
                     // ── Common policies (applied to every API unless overridden) ──
                     def commonPolicies = []
                     if (fileExists('common/policies.yaml')) {
                         def commonCfg = readYaml file: 'common/policies.yaml'
                         commonPolicies = (commonCfg.policies ?: []).collect { p ->
-                            [
-                                assetId      : "${POLICY_ID_NORM[p.assetId] ?: p.assetId}",
-                                groupId      : "${p.groupId ?: env.MULESOFT_POLICY_GROUP}",
-                                policyVersion: "${p.policyVersion}",
-                                config       : p.config ?: [:]
-                            ]
+                            resolvePolicy(p, POLICY_CATALOGUE, 'common/policies.yaml')
                         }
                         if (commonPolicies) {
                             log('INFO', "Common policies: ${commonPolicies.collect { it.assetId }.join(', ')}")
                         }
                     }
 
-                    def waveApiMap = [:]
-                    wavesToRun.each { wave ->
-                        def manifestPath = "waves/${wave}/manifest.yaml"
+                    def releaseApiMap = [:]
+                    releasesToRun.each { release ->
+                        def manifestPath = "release/${release}/manifest.yaml"
                         if (!fileExists(manifestPath)) {
-                            log('WARN', "Wave ${wave}: manifest not found at ${manifestPath} — skipping")
+                            log('WARN', "Release ${release}: manifest not found at ${manifestPath} — skipping")
                             return
                         }
                         def manifest = readYaml file: manifestPath
@@ -176,7 +191,7 @@ pipeline {
                         if (appFilter) {
                             def filterLower = appFilter.collect { it.toLowerCase() }
                             apps = apps.findAll { filterLower.contains(it.toLowerCase()) }
-                            log('INFO', "Wave ${wave}: filtered to [${apps.join(', ')}]")
+                            log('INFO', "Release ${release}: filtered to [${apps.join(', ')}]")
                         }
 
                         def apiList = []
@@ -248,7 +263,17 @@ pipeline {
                                 if (!uri) {
                                     error "No URI for endpoint '${epName}' of ${appName} in ${rtPath} — add it under endpoints:"
                                 }
-                                [name: epName, uri: uri, publicPath: "${ep.publicPath ?: ''}"]
+                                // methods / headers are optional route-rule constraints
+                                // declared in config.yaml; flattened to plain types so
+                                // they survive CPS serialisation inside closures.
+                                def epMethods = (ep.methods ?: []).collect { "${it}".toUpperCase() }
+                                def epHeaders = [:]
+                                ep.headers?.each { k, v -> epHeaders["${k}"] = "${v}" }
+                                [name      : epName,
+                                 uri       : uri,
+                                 publicPath: "${ep.publicPath ?: ''}",
+                                 methods   : epMethods,
+                                 headers   : epHeaders]
                             }
                             if (!endpoints) {
                                 error "No endpoints declared in ${cfgPath}"
@@ -265,12 +290,7 @@ pipeline {
                             log('INFO', "  ${appName}: proxyUri=${proxyUri}  upstream=${upstreamUri}  (${endpoints.size()} endpoints from ${rtPath})")
 
                             def apiPolicies = (apiCfg.policies ?: []).collect { p ->
-                                [
-                                    assetId      : "${POLICY_ID_NORM[p.assetId] ?: p.assetId}",
-                                    groupId      : "${p.groupId ?: env.MULESOFT_POLICY_GROUP}",
-                                    policyVersion: "${p.policyVersion}",
-                                    config       : p.config ?: [:]
-                                ]
+                                resolvePolicy(p, POLICY_CATALOGUE, cfgPath)
                             }
                             // Merge: API-specific policies take precedence; common policies fill in the rest
                             def apiSpecificIds = apiPolicies.collect { it.assetId } as Set
@@ -289,26 +309,26 @@ pipeline {
                                 configPath    : cfgPath,
                                 currentVersion: currentVersion,
                                 policies      : policies,
-                                wave          : wave,
+                                release          : release,
                                 endpoints     : endpoints
                             ] + coords)
                         }
-                        waveApiMap[wave] = apiList
-                        log('INFO', "Wave ${wave}: [${apiList.collect { it.appName }.join(', ')}]")
+                        releaseApiMap[release] = apiList
+                        log('INFO', "Release ${release}: [${apiList.collect { it.appName }.join(', ')}]")
                     }
 
-                    WAVES_TO_RUN  = wavesToRun
-                    WAVE_API_MAP  = waveApiMap
+                    RELEASES_TO_RUN  = releasesToRun
+                    RELEASE_API_MAP  = releaseApiMap
                     ALL_RESULTS   = []
                     API_INSTANCES = [:]
 
                     if (params.DRY_RUN) {
-                        wavesToRun.each { wave ->
-                            (waveApiMap[wave] ?: []).each { api ->
-                                log('INFO', "[DRY_RUN] wave=${wave}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
+                        releasesToRun.each { release ->
+                            (releaseApiMap[release] ?: []).each { api ->
+                                log('INFO', "[DRY_RUN] release=${release}  app=${api.appName}  ${api.assetId}:${api.assetVersion}")
                                 log('INFO', "[DRY_RUN]   upstream=${api.upstreamUri}  proxy=${api.proxyUri}")
                                 log('INFO', "[DRY_RUN]   policies=${api.policies?.collect { it.assetId }}")
-                                ALL_RESULTS << [wave: wave, label: api.instanceLabel, status: 'DRY_RUN', instanceId: '-']
+                                ALL_RESULTS << [release: release, label: api.instanceLabel, status: 'DRY_RUN', instanceId: '-']
                             }
                         }
                     }
@@ -331,8 +351,8 @@ pipeline {
                             usernameVariable: 'NEXUS_USR',
                             passwordVariable: 'NEXUS_PSW')]) {
                         def duplicates = []
-                        WAVES_TO_RUN.each { wave ->
-                            (WAVE_API_MAP[wave] ?: []).each { api ->
+                        RELEASES_TO_RUN.each { release ->
+                            (RELEASE_API_MAP[release] ?: []).each { api ->
                                 // A pinned API was already fetched from Nexus during Load
                                 // Config, so its existence is proven and it is not being
                                 // republished — nothing to check.
@@ -398,8 +418,8 @@ pipeline {
                         error "${approverVar} is not set in the managed properties file '${env.APPROVERS_CONFIG_ID}', so no one is authorised to approve a ${params.ENVIRONMENT} deployment. Add it under Folder → Config Files → Flex Gateway Approvers (comma-separated user IDs or a group name)."
                     }
 
-                    def apiNames = (WAVES_TO_RUN ?: []).collectMany { w ->
-                        (WAVE_API_MAP[w] ?: []).collect { "${it.appName}" }
+                    def apiNames = (RELEASES_TO_RUN ?: []).collectMany { w ->
+                        (RELEASE_API_MAP[w] ?: []).collect { "${it.appName}" }
                     }
                     // Count only — the log is readable by anyone who can see the build,
                     // so the approver identities are not echoed into it.
@@ -409,7 +429,7 @@ pipeline {
                     def approval = timeout(time: 48, unit: 'HOURS') {
                         input(
                             id: 'HigherEnvApproval',
-                            message: "Approve deployment of ${params.WAVE} [${apiNames.join(', ')}] to ${params.ENVIRONMENT}?",
+                            message: "Approve deployment of ${params.RELEASE} [${apiNames.join(', ')}] to ${params.ENVIRONMENT}?",
                             ok: 'Approve & Continue',
                             submitter: approversList,
                             submitterParameter: 'APPROVED_BY',
@@ -427,7 +447,7 @@ pipeline {
                     log('INFO', "${params.ENVIRONMENT} deployment approved by: ${env.APPROVED_BY}")
                     log('INFO', "Justification: ${env.APPROVAL_JUSTIFICATION}")
 
-                    currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.WAVE} -> ${params.ENVIRONMENT}"
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.RELEASE} -> ${params.ENVIRONMENT}"
                     currentBuild.description = "Approved by ${env.APPROVED_BY} | ${env.APPROVAL_JUSTIFICATION}"
                 }
             }
@@ -476,8 +496,8 @@ pipeline {
             options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
-                    WAVES_TO_RUN.each { wave ->
-                        (WAVE_API_MAP[wave] ?: []).each { api ->
+                    RELEASES_TO_RUN.each { release ->
+                        (RELEASE_API_MAP[release] ?: []).each { api ->
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                 ensureExchangeAsset(api)
                             }
@@ -493,8 +513,8 @@ pipeline {
             options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
-                    WAVES_TO_RUN.each { wave ->
-                        (WAVE_API_MAP[wave] ?: []).each { api ->
+                    RELEASES_TO_RUN.each { release ->
+                        (RELEASE_API_MAP[release] ?: []).each { api ->
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                 def instanceId = findExistingInstance(api.assetId, api.instanceLabel)
                                 if (instanceId) {
@@ -519,14 +539,14 @@ pipeline {
             options { timeout(time: 30, unit: 'MINUTES') }
             steps {
                 script {
-                    WAVES_TO_RUN.each { wave ->
-                        (WAVE_API_MAP[wave] ?: []).each { api ->
+                    RELEASES_TO_RUN.each { release ->
+                        (RELEASE_API_MAP[release] ?: []).each { api ->
                             def label      = api.instanceLabel
                             def instanceId = API_INSTANCES[label]
                             def status     = 'FAILED'
                             if (!instanceId) {
                                 log('WARN', "No instance ID for ${api.appName} — Create API Instance likely failed, skipping deploy")
-                                ALL_RESULTS << [wave: wave, label: label, status: 'FAILED', instanceId: '-']
+                                ALL_RESULTS << [release: release, label: label, status: 'FAILED', instanceId: '-']
                                 return
                             }
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
@@ -537,7 +557,7 @@ pipeline {
                                 validateInstance(instanceId, label)
                                 status = 'OK'
                             }
-                            ALL_RESULTS << [wave: wave, label: label, status: status, instanceId: instanceId]
+                            ALL_RESULTS << [release: release, label: label, status: status, instanceId: instanceId]
                         }
                     }
                 }
@@ -558,8 +578,8 @@ pipeline {
                             credentialsId: env.NEXUS_CREDS_ID,
                             usernameVariable: 'NEXUS_USR',
                             passwordVariable: 'NEXUS_PSW')]) {
-                        WAVES_TO_RUN.each { wave ->
-                            (WAVE_API_MAP[wave] ?: []).each { api ->
+                        RELEASES_TO_RUN.each { release ->
+                            (RELEASE_API_MAP[release] ?: []).each { api ->
                                 def deployed = (ALL_RESULTS ?: []).find {
                                     it.label == api.instanceLabel && it.status == 'OK'
                                 }
@@ -620,9 +640,9 @@ pipeline {
                     echo '════════════════════ DEPLOYMENT SUMMARY ════════════════════'
                     (ALL_RESULTS ?: []).each { r ->
                         def icon = r.status == 'OK' ? 'OK      ' : (r.status == 'DRY_RUN' ? 'DRY_RUN ' : 'FAILED  ')
-                        def api  = (WAVE_API_MAP[r.wave] ?: []).find { it.instanceLabel == r.label }
+                        def api  = (RELEASE_API_MAP[r.release] ?: []).find { it.instanceLabel == r.label }
                         def ver  = api?.FINAL_VERSION ?: '-'
-                        echo "  ${icon} | ${r.wave} | ${r.label.padRight(32)} | instanceId=${r.instanceId} | config=${ver}"
+                        echo "  ${icon} | ${r.release} | ${r.label.padRight(32)} | instanceId=${r.instanceId} | config=${ver}"
                     }
                     echo '═════════════════════════════════════════════════════════════'
                     def failed = (ALL_RESULTS ?: []).findAll { it.status == 'FAILED' }
@@ -725,10 +745,16 @@ def configureRouting(String instanceId, Map api) {
     // label comes from the endpoint's `name` in config.yaml so routes are
     // identifiable in the Anypoint UI rather than showing as unnamed.
     def routes = endpoints.findAll { uriToId["${it.uri}"] }.collect { ep ->
+        // Anypoint expects methods as a pipe-separated string ("GET|POST") and
+        // headers as a name→value map. Both are omitted when not declared, which
+        // leaves the route matching on path alone.
+        def rules = [path: "${ep.publicPath}(.*)"]
+        if (ep.methods) { rules.methods = ep.methods.join('|') }
+        if (ep.headers) { rules.headers = ep.headers }
         [
             label    : "${ep.name}",
             upstreams: [[id: uriToId["${ep.uri}"], weight: 100]],
-            rules    : [path: "${ep.publicPath}(.*)"]
+            rules    : rules
         ]
     }
     if (routes.size() < endpoints.size()) {
@@ -1206,6 +1232,51 @@ def fetchPinnedConfig(String appName, Map coords) {
 def nexusArtifactUrl(Map api) {
     def file = "${api.appName}-${api.FINAL_VERSION}.${env.ARTIFACT_TYPE}"
     return "https://${env.NEXUS_URL}/repository/${api.NEXUS_REPO}/${api.NEXUS_GROUP_PATH}/${api.appName}/${api.FINAL_VERSION}/${file}"
+}
+
+// Resolve a policy reference from config.yaml against the policies/ catalogue.
+//
+// A reference is either a bare name:
+//     policies:
+//       - client-id-enforcement
+// or a name plus API-specific values layered over the catalogue defaults:
+//     policies:
+//       - ref: ip-allowlist
+//         config:
+//           ips: [10.40.0.0/16]
+//
+// assetId, policyVersion and groupId always come from policies/<policy>.yaml —
+// they are never restated in config.yaml, so a version bump happens in one place.
+def resolvePolicy(Object entry, Map catalogue, String sourcePath) {
+    String ref
+    Map    overrides = [:]
+
+    if (entry instanceof CharSequence) {
+        ref = "${entry}"
+    } else if (entry instanceof Map) {
+        ref = "${entry.ref ?: entry.assetId ?: ''}"
+        overrides = (entry.config ?: [:]) as Map
+    }
+    if (!ref) {
+        error "Unreadable policy entry in ${sourcePath}: expected a policy name, or a map with 'ref:'. Got: ${entry}"
+    }
+
+    def def_ = catalogue[ref]
+    if (!def_) {
+        error "Policy '${ref}' referenced in ${sourcePath} is not defined in policies/. Available: ${catalogue.keySet().join(', ')}"
+    }
+
+    // API-specific values win over the catalogue defaults, key by key
+    def merged = [:]
+    (def_.defaults ?: [:]).each { k, v -> merged["${k}"] = v }
+    overrides.each { k, v -> merged["${k}"] = v }
+
+    return [
+        assetId      : def_.assetId,
+        groupId      : def_.groupId,
+        policyVersion: def_.policyVersion,
+        config       : merged
+    ]
 }
 
 // JSON-structured, correlation-aware log line.
