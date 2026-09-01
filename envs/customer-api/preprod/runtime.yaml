@@ -11,9 +11,6 @@ deployVersion: 1.0.0
 # under anypoint.yaml environments.<env>.gateways. Omit to use defaultGateway.
 # gateway: fxf-dev-gtwy-2
 
-publicHostname: preprod-flex.fxf.example.com
-tlsCertName: fxf-preprod-wildcard
-
 proxyUri: http://0.0.0.0:8083
 
 # Backend host every route for this API forwards to. Host only — no path.

@@ -139,7 +139,16 @@ endpoints:
 
 ## Environment Configuration
 
-Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`. It is self-contained and holds every environment-specific value for that API: the gateway `publicHostname` and `tlsCertName`, the `proxyUri` (listener port), and the backend `upstreamHost`.
+Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`. It holds every environment-specific value for that API, and nothing the pipeline does not read:
+
+| Key | Purpose |
+|---|---|
+| `app`, `env` | Restate the file's own location. Validated against the path — a copied file that still names its source app or environment fails the build. |
+| `deployVersion` | The config-contract version this environment deploys (see Config Versioning). |
+| `gateway` | Which gateway in this environment to deploy to. Omit to use `defaultGateway`. |
+| `proxyUri` | The listener the API instance binds to. |
+| `upstreamHost` | The backend host every route forwards to. |
+| `endpoints` | Optional per-environment path overrides. |
 
 `upstreamHost` is **scheme and host only, with no path** — the build rejects a value containing one. All of an API's endpoints forward to the same host and differ only by path, so the pipeline creates **one upstream per API** rather than one per endpoint, and each route carries its own path rule. Across ~1,000 endpoints that is the difference between one upstream per application and one per endpoint.
 

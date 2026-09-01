@@ -237,6 +237,18 @@ pipeline {
                             }
                             def runtime = readYaml file: rtPath
 
+                            // app: and env: restate the file's own location. Enforce that
+                            // they agree with it — a runtime.yaml copied to a new app or
+                            // environment and not fully edited would otherwise describe one
+                            // thing while being applied to another.
+                            def rtEnvDir = rtPath.tokenize('/')[2]
+                            if (!runtime.app || "${runtime.app}" != appName) {
+                                error "${rtPath}: app is '${runtime.app ?: '(missing)'}' but the file lives under envs/${appName}/ — set app: ${appName}"
+                            }
+                            if (!runtime.env || !"${runtime.env}".equalsIgnoreCase(rtEnvDir)) {
+                                error "${rtPath}: env is '${runtime.env ?: '(missing)'}' but the file lives under .../${rtEnvDir}/ — set env: ${rtEnvDir}"
+                            }
+
                             // ── Which config version does this environment deploy? ──
                             // config.yaml apiVersion  = the CURRENT version of the contract
                             // runtime.yaml deployVersion = the version THIS env is pinned to
