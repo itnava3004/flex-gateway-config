@@ -11,7 +11,10 @@ deployVersion: 1.0.0
 # key under anypoint.yaml environments.dev.gateways.
 gateway: fxf-dev-gtwy-2
 
-proxyUri: http://0.0.0.0:8082
+# Listener for this API instance. The base path is what keeps instances
+# apart on a shared port — Anypoint treats port+path as the conflict key,
+# so every API can sit on 8081 as long as each owns a distinct base path.
+proxyUri: http://0.0.0.0:8081/orders
 
 # Backend host every route for this API forwards to. Host only — no path.
 # Per-endpoint paths live on the route rules (publicPath in config.yaml).

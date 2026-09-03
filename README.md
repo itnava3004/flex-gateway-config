@@ -147,7 +147,7 @@ Each API has one runtime file per environment at `envs/<app>/<env>/runtime.yaml`
 | `app`, `env` | Restate the file's own location. Validated against the path — a copied file that still names its source app or environment fails the build. |
 | `deployVersion` | The config-contract version this environment deploys (see Config Versioning). |
 | `gateway` | Which gateway in this environment to deploy to. Required. |
-| `proxyUri` | The listener the API instance binds to. |
+| `proxyUri` | The listener the API instance binds to, **including a base path**. |
 | `upstreamHost` | The backend host every route forwards to. |
 | `endpoints` | Optional per-environment path overrides. |
 
@@ -164,6 +164,37 @@ upstreamHost: https://l7-gw.fxf.internal
 The path a route matches on — and therefore forwards to the host — is `publicPath` from `config.yaml`, unless that environment's `runtime.yaml` overrides it under `endpoints:`.
 
 `apis/<app>/config.yaml` stays environment-independent — endpoint names, public paths, auth patterns and policies only. Endpoints are joined by name at deploy time, so an endpoint present in `config.yaml` but missing from `runtime.yaml` fails the build with a clear error.
+
+## Ports and base paths
+
+Anypoint's uniqueness key for a listener is **port + base path**, not port alone:
+
+```
+The port 8081 path / is already in use for Flex Target with id 2a0abcce-...
+```
+
+So `proxyUri: http://0.0.0.0:8081` (base path `/`) allows exactly one instance per
+port, and a gateway with two listener ports caps you at two APIs. Giving each API a
+distinct base path removes that ceiling entirely:
+
+```yaml
+proxyUri: http://0.0.0.0:8081/payments
+```
+
+Every API can then share one port:
+
+| API | proxyUri |
+|---|---|
+| customer-api | `http://0.0.0.0:8081/customer` |
+| orders-api | `http://0.0.0.0:8081/orders` |
+| payments-api | `http://0.0.0.0:8081/payments` |
+
+The base path is the prefix each API already owns in its `publicPath` values, so the
+externally visible URL is unchanged. This is what makes ~1,000 endpoints workable on a
+small number of listener ports — port count stops being a constraint on how many APIs
+a gateway can host.
+
+---
 
 ## Gateways
 
