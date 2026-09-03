@@ -5,7 +5,7 @@
 // Flow:
 //   1. Checkout flex-gateway-config repo (or the repo this Jenkinsfile lives in)
 //   2. Read anypoint.yaml → resolve orgId, envId and the gateways for ENVIRONMENT
-//   3. Read release/<RELEASE>/manifest.yaml → list of apps to deploy
+//   3. Read releases/<RELEASE>/manifest.yaml → list of apps to deploy
 //   4. For each app: read apis/<app>/config.yaml + envs/<app>/<env>/runtime.yaml
 //   5. Resolve each API's Nexus config version; fail on a duplicate release
 //   6. Approval gate for test/qa/preprod/prod (skipped for dev/sandbox + DRY_RUN)
@@ -148,7 +148,7 @@ pipeline {
                     // ── Determine releases ────────────────────────────────────────
                     def releaseInput = params.RELEASE?.trim()?.toUpperCase() ?: 'R1'
                     def releasesToRun = releaseInput == 'ALL'
-                        ? ['R1', 'R2', 'R3', 'R4'].findAll { fileExists("release/${it}/manifest.yaml") }
+                        ? ['R1', 'R2', 'R3', 'R4'].findAll { fileExists("releases/${it}/manifest.yaml") }
                         : [releaseInput]
                     log('INFO', "Releases to run: ${releasesToRun.join(', ')}")
 
@@ -184,9 +184,9 @@ pipeline {
 
                     // ── Common policies (applied to every API unless overridden) ──
                     def commonPolicies = []
-                    if (fileExists('common/policies.yaml')) {
-                        def commonCfg = readYaml file: 'common/policies.yaml'
-                        commonPolicies = resolvePolicies(commonCfg.policies, POLICY_CATALOGUE, 'common/policies.yaml')
+                    if (fileExists('commons/policies.yaml')) {
+                        def commonCfg = readYaml file: 'commons/policies.yaml'
+                        commonPolicies = resolvePolicies(commonCfg.policies, POLICY_CATALOGUE, 'commons/policies.yaml')
                         if (commonPolicies) {
                             log('INFO', "Common policies: ${commonPolicies.collect { it.assetId }.join(', ')}")
                         }
@@ -194,7 +194,7 @@ pipeline {
 
                     def releaseApiMap = [:]
                     releasesToRun.each { release ->
-                        def manifestPath = "release/${release}/manifest.yaml"
+                        def manifestPath = "releases/${release}/manifest.yaml"
                         if (!fileExists(manifestPath)) {
                             log('WARN', "Release ${release}: manifest not found at ${manifestPath} — skipping")
                             return

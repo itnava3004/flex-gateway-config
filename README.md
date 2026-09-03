@@ -26,7 +26,7 @@ eai-3541669-flex-gateway-config/
 │   ├── client-id-enforcement.yaml
 │   ├── rate-limiting-sla.yaml
 │   └── fxf-custom-header.yaml
-├── release/                       # Release manifests
+├── releases/                      # Release manifests
 │   ├── R1/manifest.yaml
 │   └── R2/manifest.yaml
 ├── inventory/
@@ -110,7 +110,7 @@ Only the keys you supply are overridden; everything else falls through to the po
 
 The catalogue is indexed by `assetId`, **not** filename — `policies/rate-limiting-sla.yaml` declares `assetId: rate-limiting`, so that is what config.yaml references. Referencing a policy that is not in `policies/` fails the build and lists what is available.
 
-`common/policies.yaml` uses the same reference form and applies to every API, unless that API declares the same policy itself — in which case the API's entry wins.
+`commons/policies.yaml` uses the same reference form and applies to every API, unless that API declares the same policy itself — in which case the API's entry wins.
 
 | Policy | Purpose |
 |--------|---------|
