@@ -777,7 +777,7 @@ def configureRouting(String instanceId, Map api) {
         log('INFO', "GET upstreams for ${api.appName}: ${existing.take(1000)}")
         def parsed = readJSON text: existing
         def list   = (parsed instanceof List) ? parsed : (parsed?.upstreams ?: [])
-        list.each { u -> if (u?.uri && u?.id) { uriToId["${u.uri}"] = "${u.id}" } }
+        list.each { u -> if (u?.uri && u?.id) { uriToId[u.uri.toString()] = u.id.toString() } }
     } catch (err) {
         log('WARN', "Could not GET upstreams for ${api.appName}: ${err.message}")
     }
@@ -786,7 +786,7 @@ def configureRouting(String instanceId, Map api) {
     // All endpoints of an API forward to the same backend host and differ only
     // by path, so a single upstream serves them all. Creating one per endpoint
     // would mean ~1,000 upstreams across the estate for no routing benefit.
-    def hostUri = "${endpoints[0].uri}"
+    def hostUri = endpoints[0].uri.toString()
     if (!uriToId[hostUri]) {
         def upFile = "upstream-${api.appName}.json"
         writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.appName, uri: hostUri])
@@ -846,9 +846,13 @@ def configureRouting(String instanceId, Map api) {
     // endpoint removed from config.yaml loses its route but leaves the upstream
     // behind, and it reappears in the Upstream dropdown in API Manager.
     if (patched) {
-        def wantedUris = [hostUri] as Set
+        // .toString() throughout: a GString and a String with the same content are
+        // == but hash differently, so Set.contains() misses where map subscript
+        // coerces and hits. That mismatch made the cleanup treat the upstream it
+        // had just reused as an orphan and try to delete it.
+        def wantedUris = [hostUri.toString()] as Set
         uriToId.each { uri, id ->
-            if (wantedUris.contains(uri)) { return }
+            if (wantedUris.contains(uri.toString())) { return }
             try {
                 apiCall('DELETE', "${base}/upstreams/${id}", null)
                 log('INFO', "${api.appName}: removed orphaned upstream ${uri} (id=${id})")
