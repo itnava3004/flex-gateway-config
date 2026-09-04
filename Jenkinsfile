@@ -768,93 +768,92 @@ def configureRouting(String instanceId, Map api) {
     if (!endpoints) { return }
 
     def base = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}"
-    def uriToId = [:]
 
-    // ── Existing upstreams (idempotent re-runs) ──
+    // ── Every existing upstream, duplicates included ──
+    // Tracked as a list of [id, uri] rather than a uri→id map: Anypoint happily
+    // holds several upstreams with the SAME uri (the instance's own default plus
+    // one per earlier run), and a map keyed by uri collapses them to one entry,
+    // leaving the extras invisible to both the reuse check and the cleanup.
+    def existingUpstreams = []
     try {
-        def existing = apiCall('GET', "${base}/upstreams", null)
-        log('INFO', "${api.appName}: ${list.size()} existing upstream(s)")
-        def parsed = readJSON text: existing
+        def parsed = readJSON text: apiCall('GET', "${base}/upstreams", null)
         def list   = (parsed instanceof List) ? parsed : (parsed?.upstreams ?: [])
-        list.each { u -> if (u?.uri && u?.id) { uriToId[u.uri.toString()] = u.id.toString() } }
+        list.each { u ->
+            if (u?.uri && u?.id) { existingUpstreams << [id: u.id.toString(), uri: u.uri.toString()] }
+        }
+        log('INFO', "${api.appName}: ${existingUpstreams.size()} existing upstream(s)")
     } catch (err) {
         log('WARN', "Could not GET upstreams for ${api.appName}: ${err.message}")
     }
 
-    // ── One host-only upstream, shared by every route ──
-    // All endpoints of an API forward to the same backend host and differ only
-    // by path, so a single upstream serves them all. Creating one per endpoint
-    // would mean ~1,000 upstreams across the estate for no routing benefit.
-    def hostUri = endpoints[0].uri.toString()
-    if (!uriToId[hostUri]) {
+    // ── Exactly one host-only upstream, shared by every route ──
+    // All endpoints of an API forward to the same backend host and differ only by
+    // path, so one upstream serves them all. Reuse the first match if there is one;
+    // any others are deleted below so re-runs cannot accumulate duplicates.
+    def hostUri  = endpoints[0].uri.toString()
+    def matching = existingUpstreams.findAll { it.uri == hostUri }
+    def hostId   = matching ? matching[0].id : null
+
+    if (hostId) {
+        log('INFO', "${api.appName}: reusing upstream ${hostUri}" +
+                    (matching.size() > 1 ? " (${matching.size() - 1} duplicate(s) will be removed)" : ''))
+    } else {
         def upFile = "upstream-${api.appName}.json"
         writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.appName, uri: hostUri])
         try {
-            def resp = apiCall('POST', "${base}/upstreams", upFile)
-            log('INFO', "${api.appName}: created upstream ${hostUri}")
-            def created = readJSON text: resp
-            if (created?.id) { uriToId[hostUri] = "${created.id}" }
+            def created = readJSON text: apiCall('POST', "${base}/upstreams", upFile)
+            if (created?.id) {
+                hostId = created.id.toString()
+                log('INFO', "${api.appName}: created upstream ${hostUri}")
+            }
         } catch (err) {
             log('WARN', "Could not create upstream for ${api.appName} (${hostUri}): ${err.message}")
         }
-    } else {
-        log('INFO', "${api.appName}: reusing existing upstream ${hostUri}")
     }
 
-    // ── PATCH routing, referencing upstreams by their server-assigned ids ──
-    // label comes from the endpoint's `name` in config.yaml so routes are
-    // identifiable in the Anypoint UI rather than showing as unnamed.
-    def hostId = uriToId[hostUri]
     if (!hostId) {
         log('WARN', "No upstream resolved for ${api.appName} (${hostUri}) — skipping routing PATCH")
         return
     }
 
-    // Every route points at the same host-only upstream and is distinguished by
-    // its path rule. Anypoint expects methods as a pipe-separated string
-    // ("GET|POST") and headers as a name→value map; both are omitted when not
-    // declared, leaving the route matching on path alone.
+    // ── PATCH routing ──
+    // Every route points at that one upstream and is distinguished by its path
+    // rule. label comes from the endpoint's name in config.yaml so routes are
+    // identifiable in the Anypoint UI. Anypoint expects methods as a
+    // pipe-separated string ("GET|POST") and headers as a name→value map; both
+    // are omitted when not declared, leaving the route matching on path alone.
     def routes = endpoints.collect { ep ->
         def rules = [path: "${ep.publicPath}(.*)"]
         if (ep.methods) { rules.methods = ep.methods.join('|') }
         if (ep.headers) { rules.headers = ep.headers }
-        [
-            label    : "${ep.name}",
-            upstreams: [[id: hostId, weight: 100]],
-            rules    : rules
-        ]
+        [label: "${ep.name}", upstreams: [[id: hostId, weight: 100]], rules: rules]
     }
 
     def routeFile = "routing-${api.appName}.json"
-    def routeBody = writeJSON(returnText: true, json: [routing: routes])
-    writeFile file: routeFile, text: routeBody
+    writeFile file: routeFile, text: writeJSON(returnText: true, json: [routing: routes])
     def patched = false
     try {
-        def resp = apiCall('PATCH', base, routeFile)
+        apiCall('PATCH', base, routeFile)
         log('INFO', "Configured ${routes.size()} routes for ${api.appName}: ${endpoints.collect { it.publicPath }.join(', ')}")
         patched = true
     } catch (err) {
         log('WARN', "Could not PATCH routing for ${api.appName}: ${err.message}")
     }
 
-    // ── Delete upstreams no longer referenced by config.yaml ──
-    // Only after the routing PATCH has landed, so nothing still points at them —
-    // Anypoint refuses to delete an upstream that is in use. Without this, an
-    // endpoint removed from config.yaml loses its route but leaves the upstream
-    // behind, and it reappears in the Upstream dropdown in API Manager.
+    // ── Remove every upstream except the one now in use ──
+    // Covers both duplicates of the same host and upstreams left by endpoints that
+    // config.yaml no longer declares. Runs only after the routing PATCH has landed,
+    // since Anypoint refuses to delete an upstream that is still referenced — and
+    // because hostId is always kept, the "last upstream cannot be deleted" guard is
+    // never hit either.
     if (patched) {
-        // .toString() throughout: a GString and a String with the same content are
-        // == but hash differently, so Set.contains() misses where map subscript
-        // coerces and hits. That mismatch made the cleanup treat the upstream it
-        // had just reused as an orphan and try to delete it.
-        def wantedUris = [hostUri.toString()] as Set
-        uriToId.each { uri, id ->
-            if (wantedUris.contains(uri.toString())) { return }
+        existingUpstreams.each { u ->
+            if (u.id == hostId) { return }
             try {
-                apiCall('DELETE', "${base}/upstreams/${id}", null)
-                log('INFO', "${api.appName}: removed orphaned upstream ${uri} (id=${id})")
+                apiCall('DELETE', "${base}/upstreams/${u.id}", null)
+                log('INFO', "${api.appName}: removed stale upstream ${u.uri} (id=${u.id})")
             } catch (err) {
-                log('WARN', "${api.appName}: could not delete orphaned upstream ${uri} (id=${id}): ${err.message}")
+                log('WARN', "${api.appName}: could not delete upstream ${u.uri} (id=${u.id}): ${err.message}")
             }
         }
     }
