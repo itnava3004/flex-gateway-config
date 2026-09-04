@@ -3,6 +3,13 @@
 # envs/<app>/<env>/runtime.yaml.
 app: customer-api
 assetId: customer-api
+# Optional display names. apiLabel is the base of the API instance label in
+# API Manager (the environment suffix is appended); upstreamLabel names the
+# upstream. Both default to the folder name. NOTE: changing apiLabel on an
+# API already deployed makes the pipeline create a NEW instance rather than
+# reuse the existing one, because instances are matched by label.
+# apiLabel: Customer API
+# upstreamLabel: Customer Backend
 exchangeVersion: 1.0.0   # Exchange asset version
 configVersion:   1.0.0   # current version of this config contract
 

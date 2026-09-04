@@ -360,7 +360,12 @@ pipeline {
                                 appName       : "${appName}",
                                 assetId       : "${apiCfg.assetId}",
                                 assetVersion  : "${apiCfg.exchangeVersion}",
-                                instanceLabel : "${appName}-${params.ENVIRONMENT}",
+                                // apiLabel is the base of the API instance label shown in
+                                // API Manager; defaults to the folder name. The environment
+                                // suffix is always appended, so instances stay
+                                // distinguishable and findExistingInstance keeps matching.
+                                instanceLabel : "${apiCfg.apiLabel ?: appName}-${params.ENVIRONMENT}",
+                                upstreamLabel : "${apiCfg.upstreamLabel ?: appName}",
                                 upstreamUri   : upstreamUri,
                                 proxyUri      : proxyUri,
                                 runtimePath   : rtPath,
@@ -804,7 +809,7 @@ def configureRouting(String instanceId, Map api) {
                     (matching.size() > 1 ? " (${matching.size() - 1} duplicate(s) will be removed)" : ''))
     } else {
         def upFile = "upstream-${api.appName}.json"
-        writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.appName, uri: hostUri])
+        writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.upstreamLabel ?: api.appName, uri: hostUri])
         try {
             def created = readJSON text: apiCall('POST', "${base}/upstreams", upFile)
             if (created?.id) {

@@ -139,6 +139,8 @@ endpoints:
 
 `routeLabel` is the name shown against the route in API Manager. It defaults to the endpoint `name`, so set it only where a friendlier label is wanted.
 
+`config.yaml` also takes `apiLabel` (the API instance label, with the environment suffix appended) and `upstreamLabel`, both defaulting to the folder name. Note that changing `apiLabel` on an already-deployed API creates a new instance rather than renaming the existing one, since instances are matched by label.
+
 `methods` and `headers` are both optional. Omit them and the route matches on path alone. The pipeline sends `methods` to API Manager as a pipe-separated string (`GET|POST`) and `headers` as a name/value map, alongside the path rule.
 
 ---

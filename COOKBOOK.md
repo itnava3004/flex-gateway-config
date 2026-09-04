@@ -121,6 +121,29 @@ Delete it from `config.yaml`. The routing reconcile removes the route from API M
 on the next run — `config.yaml` is authoritative for removals, not just additions. If a
 `runtime.yaml` still lists a path override for it you get a WARN; tidy it up.
 
+### Rename what appears in API Manager
+
+Three labels are settable, all in `config.yaml`, all optional:
+
+```yaml
+apiLabel: Customer API             # API instance  -> "Customer API-dev"
+upstreamLabel: Customer Backend    # the upstream
+endpoints:
+  - name: customer-address
+    routeLabel: Customer Address   # this route
+```
+
+Each defaults to the folder name (`routeLabel` to the endpoint name), so leave them
+out unless you want something friendlier than the slug.
+
+**One caution on `apiLabel`.** Instances are matched by label, so changing it on an
+API that is already deployed makes the pipeline create a *second* instance rather
+than reuse the existing one — the old one stays behind, still serving. Set it before
+first deployment, or be ready to retire the old instance by hand.
+
+`routeLabel` and `upstreamLabel` carry no such risk; routes and upstreams are
+reconciled every run.
+
 ### Change a policy for one API
 
 Give the policy a value in that API's `config.yaml`. Only the keys you supply are
@@ -227,6 +250,8 @@ and the build succeeds having deployed nothing.
 |---|---|---|
 | `app` | yes | Application name |
 | `assetId` | yes | Exchange asset identifier |
+| `apiLabel` | no | Base of the API instance label in API Manager; the environment suffix is appended. Defaults to the folder name |
+| `upstreamLabel` | no | Name shown against the upstream. Defaults to the folder name |
 | `exchangeVersion` | yes | Exchange asset version |
 | `configVersion` | yes | Current version of this contract |
 | `endpoints[].name` | yes | Endpoint name; joins to `runtime.yaml` overrides |
