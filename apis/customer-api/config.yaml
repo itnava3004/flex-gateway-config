@@ -6,22 +6,26 @@ assetId: customer-api
 exchangeVersion: 1.0.0   # Exchange asset version
 configVersion:   1.0.0   # current version of this config contract
 
-# Route rules. methods and headers are optional and constrain which requests
-# match the route in API Manager; omit them to match on path alone.
+# Route rules. routeLabel is the name shown against the route in API Manager
+# and defaults to the endpoint name. methods and headers are optional and
+# constrain which requests match; omit them to match on path alone.
 endpoints:
   - name: customer-address
+    routeLabel: Customer Address
     publicPath: /customer/v1/address
     methods: [GET]
     headers:
       X-FXF-Channel: internal
     authPattern: client-id-enforcement
   - name: customer-consent
+    routeLabel: Customer Consent
     publicPath: /customer/v1/consent
     methods: [GET, POST]
     headers:
       X-FXF-Channel: internal
     authPattern: client-id-enforcement
   - name: customer-profile
+    routeLabel: Customer Profile
     publicPath: /customer/v1/profile
     methods: [GET]
     headers:

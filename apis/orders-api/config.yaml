@@ -6,8 +6,9 @@ assetId: orders-api
 exchangeVersion: 1.0.0   # Exchange asset version
 configVersion:   1.0.0   # current version of this config contract
 
-# Route rules. methods and headers are optional and constrain which requests
-# match the route in API Manager; omit them to match on path alone.
+# Route rules. Add `routeLabel:` to name a route in API Manager; it defaults
+# to the endpoint name. methods and headers are optional and constrain which
+# requests match; omit them to match on path alone.
 endpoints:
   - name: orders-cancel
     publicPath: /orders/v1/cancel

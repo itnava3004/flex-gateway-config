@@ -324,9 +324,14 @@ pipeline {
                                 if (!epPath) {
                                     error "No path for endpoint '${epName}' of ${appName} — set publicPath in ${cfgPath} or override it in ${rtPath}"
                                 }
+                                // Route label shown in API Manager. Defaults to the
+                                // endpoint name, which is unique within the API; set
+                                // routeLabel in config.yaml for something friendlier.
+                                def epLabel = "${ep.routeLabel ?: epName}"
                                 [name      : epName,
                                  uri       : uri,
                                  publicPath: epPath,
+                                 routeLabel: epLabel,
                                  methods   : epMethods,
                                  headers   : epHeaders]
                             }
@@ -818,15 +823,15 @@ def configureRouting(String instanceId, Map api) {
 
     // ── PATCH routing ──
     // Every route points at that one upstream and is distinguished by its path
-    // rule. label comes from the endpoint's name in config.yaml so routes are
-    // identifiable in the Anypoint UI. Anypoint expects methods as a
+    // rule. label is the endpoint's routeLabel if set, otherwise its name, so
+    // routes are identifiable in the Anypoint UI. Anypoint expects methods as a
     // pipe-separated string ("GET|POST") and headers as a name→value map; both
     // are omitted when not declared, leaving the route matching on path alone.
     def routes = endpoints.collect { ep ->
         def rules = [path: "${ep.publicPath}(.*)"]
         if (ep.methods) { rules.methods = ep.methods.join('|') }
         if (ep.headers) { rules.headers = ep.headers }
-        [label: "${ep.name}", upstreams: [[id: hostId, weight: 100]], rules: rules]
+        [label: "${ep.routeLabel ?: ep.name}", upstreams: [[id: hostId, weight: 100]], rules: rules]
     }
 
     def routeFile = "routing-${api.appName}.json"

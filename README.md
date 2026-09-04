@@ -130,11 +130,14 @@ Endpoints may constrain which requests match a route, beyond the path:
 ```yaml
 endpoints:
   - name: customer-consent
+    routeLabel: Customer Consent
     publicPath: /customer/v1/consent
     methods: [GET, POST]
     headers:
       X-FXF-Channel: internal
 ```
+
+`routeLabel` is the name shown against the route in API Manager. It defaults to the endpoint `name`, so set it only where a friendlier label is wanted.
 
 `methods` and `headers` are both optional. Omit them and the route matches on path alone. The pipeline sends `methods` to API Manager as a pipe-separated string (`GET|POST`) and `headers` as a name/value map, alongside the path rule.
 

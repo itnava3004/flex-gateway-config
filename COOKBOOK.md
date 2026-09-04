@@ -106,6 +106,7 @@ entry under Troubleshooting.
 ```yaml
 endpoints:
   - name: my-api-detail
+    routeLabel: My API Detail        # optional; defaults to the name
     publicPath: /my/v1/detail
     methods: [GET]
 ```
@@ -230,6 +231,7 @@ and the build succeeds having deployed nothing.
 | `configVersion` | yes | Current version of this contract |
 | `endpoints[].name` | yes | Endpoint name; joins to `runtime.yaml` overrides |
 | `endpoints[].publicPath` | yes | Path the route matches, and forwards to the host |
+| `endpoints[].routeLabel` | no | Route name in API Manager; defaults to `name` |
 | `endpoints[].methods` | no | e.g. `[GET, POST]` — sent as a pipe-separated string |
 | `endpoints[].headers` | no | Header name/value the route must match |
 | `endpoints[].authPattern` | no | Documentation only; not read by the pipeline |
