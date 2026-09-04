@@ -419,7 +419,8 @@ pipeline {
                                 def url  = nexusArtifactUrl(api)
                                 // --noproxy: Nexus is internal; the corporate proxy cannot reach it
                                 def code = sh(
-                                    script: """curl -ks --noproxy '*' -o /dev/null -w '%{http_code}' -u "\$NEXUS_USR:\$NEXUS_PSW" -I '${url}' || echo 000""",
+                                    script: """#!/bin/sh -e
+                                        curl -ks --noproxy '*' -o /dev/null -w '%{http_code}' -u "\$NEXUS_USR:\$NEXUS_PSW" -I '${url}' || echo 000""",
                                     returnStdout: true
                                 ).trim()
                                 if (code == '000') {
@@ -520,8 +521,7 @@ pipeline {
                     script {
                         log('INFO', 'Requesting OAuth2 access token via client_credentials grant')
                         def token = sh(
-                            script: '''
-                                set -e
+                            script: '''#!/bin/sh -e
                                 BODY='{"grant_type":"client_credentials","client_id":"'"$CLIENT_ID"'","client_secret":"'"$CLIENT_SECRET"'"}'
                                 TMP=$(mktemp)
                                 HTTP=$(curl -s -o "$TMP" -w "%{http_code}" -X POST \
@@ -658,8 +658,7 @@ pipeline {
                                     glob: "apis/${api.appName}/config.yaml,${api.runtimePath}"
 
                                 def url = nexusArtifactUrl(api)
-                                sh """
-                                    set -e
+                                sh """#!/bin/sh -e
                                     # --noproxy: Nexus is internal; the corporate proxy cannot reach it
                                     HTTP=\$(curl -ks --noproxy '*' -o /dev/null -w '%{http_code}' \\
                                         -u "\$NEXUS_USR:\$NEXUS_PSW" \\
@@ -745,7 +744,7 @@ def updateInstance(String instanceId, Map api) {
         def resp = apiCall('PATCH',
             "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}",
             "update-${api.appName}.json")
-        log('INFO', "Updated instance ${instanceId} endpoint → proxyUri=${api.proxyUri}. Response: ${resp.take(500)}")
+        log('INFO', "Updated instance ${instanceId}: proxyUri=${api.proxyUri}")
     } catch (err) {
         log('WARN', "Could not update instance ${instanceId} endpoint: ${err.message}")
     }
@@ -774,7 +773,7 @@ def configureRouting(String instanceId, Map api) {
     // ── Existing upstreams (idempotent re-runs) ──
     try {
         def existing = apiCall('GET', "${base}/upstreams", null)
-        log('INFO', "GET upstreams for ${api.appName}: ${existing.take(1000)}")
+        log('INFO', "${api.appName}: ${list.size()} existing upstream(s)")
         def parsed = readJSON text: existing
         def list   = (parsed instanceof List) ? parsed : (parsed?.upstreams ?: [])
         list.each { u -> if (u?.uri && u?.id) { uriToId[u.uri.toString()] = u.id.toString() } }
@@ -792,7 +791,7 @@ def configureRouting(String instanceId, Map api) {
         writeFile file: upFile, text: writeJSON(returnText: true, json: [label: api.appName, uri: hostUri])
         try {
             def resp = apiCall('POST', "${base}/upstreams", upFile)
-            log('INFO', "POST upstream '${api.appName}' -> ${hostUri}: ${resp.take(500)}")
+            log('INFO', "${api.appName}: created upstream ${hostUri}")
             def created = readJSON text: resp
             if (created?.id) { uriToId[hostUri] = "${created.id}" }
         } catch (err) {
@@ -828,12 +827,10 @@ def configureRouting(String instanceId, Map api) {
 
     def routeFile = "routing-${api.appName}.json"
     def routeBody = writeJSON(returnText: true, json: [routing: routes])
-    log('INFO', "PATCH routing body for ${api.appName}: ${routeBody}")
     writeFile file: routeFile, text: routeBody
     def patched = false
     try {
         def resp = apiCall('PATCH', base, routeFile)
-        log('INFO', "PATCH routing response for ${api.appName}: ${resp.take(1000)}")
         log('INFO', "Configured ${routes.size()} routes for ${api.appName}: ${endpoints.collect { it.publicPath }.join(', ')}")
         patched = true
     } catch (err) {
@@ -877,8 +874,7 @@ def ensureExchangeAsset(Map api) {
     def publishUrl = "${env.ANYPOINT_BASE_URL}/exchange/api/v2/assets"
 
     def result = sh(
-        script: """
-            set -e
+        script: """#!/bin/sh -e
             TMP=\$(mktemp)
             HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
                 -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
@@ -946,7 +942,6 @@ def createInstance(Map api) {
     def response = apiCall('POST',
         "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis",
         "create-${api.appName}.json")
-    log('INFO', "createInstance response for ${api.appName}: ${response}")
     def json = readJSON text: response
     if (!json.id) { error "createInstance returned no id for ${api.appName}. Response: ${response}" }
     return "${json.id}"
@@ -971,10 +966,8 @@ def deployInstance(String instanceId, Map api) {
     def body = writeJSON(returnText: true, json: deployJson)
     def bodyFile = "deploy-${instanceId}.json"
     writeFile file: bodyFile, text: body
-    log('INFO', "Deployment body for ${instanceId}: ${body}")
 
-    sh """
-        set -e
+    sh """#!/bin/sh -e
         DEPL_URL="\$ANYPOINT_BASE_URL/proxies/xapi/v1/organizations/\$ORG_ID/environments/\$ENV_ID/apis/${instanceId}/deployments"
 
         get_deploy_id() {
@@ -1004,10 +997,6 @@ except: print('')
                 -H "Content-Type: application/json" \\
                 --data "@${bodyFile}" > /dev/null
             echo "Deployment updated (id=\$DEPL_ID) for instance ${instanceId}"
-            echo "[DEBUG] Stored deployment (GET):"
-            curl -s "\$DEPL_URL/\$DEPL_ID" \\
-                -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
-                -H "X-Correlation-ID: \$CORRELATION_ID"
         else
             TMP=\$(mktemp)
             HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" -X POST "\$DEPL_URL" \\
@@ -1018,13 +1007,6 @@ except: print('')
             BODY=\$(cat "\$TMP"); rm -f "\$TMP"
             if [ "\$HTTP" = "200" ] || [ "\$HTTP" = "201" ]; then
                 echo "Deployment created for instance ${instanceId}"
-                NEW_ID=\$(echo "\$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
-                if [ -n "\$NEW_ID" ]; then
-                    echo "[DEBUG] Stored deployment (GET):"
-                    curl -s "\$DEPL_URL/\$NEW_ID" \\
-                        -H "Authorization: Bearer \$ANYPOINT_TOKEN" \\
-                        -H "X-Correlation-ID: \$CORRELATION_ID"
-                fi
             elif [ "\$HTTP" = "400" ]; then
                 if echo "\$BODY" | grep -q 'already in use\\|InvalidOperationError'; then
                     echo "PORT CONFLICT on gateway ${api.flexTargetName}: \$BODY\\nFix: assign a different proxyUri in envs/${api.appName}/${params.ENVIRONMENT}/runtime.yaml, or undeploy the conflicting API first." >&2
@@ -1060,7 +1042,7 @@ def applyPolicies(String instanceId, List policies, String appName) {
         def existingResp = apiCall('GET',
             "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies",
             null)
-        log('INFO', "GET policies response (first 500 chars): ${existingResp.take(500)}")
+        log('INFO', "${appName}: ${policiesList.size()} policy(ies) already applied")
         def respData = readJSON text: existingResp
         // Anypoint may return a bare [] or a wrapped {"policies":[...]} object.
         if (respData instanceof List) {
@@ -1094,8 +1076,7 @@ def applyPolicies(String instanceId, List policies, String appName) {
         writeFile file: policyFile, text: body
         def policyUrl  = "${env.ANYPOINT_BASE_URL}/apimanager/api/v1/organizations/${env.ORG_ID}/environments/${env.ENV_ID}/apis/${instanceId}/policies"
         def policyResp = sh(
-            script: """
-                set -e
+            script: """#!/bin/sh -e
                 TMP=\$(mktemp)
                 HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
                     -X POST '${policyUrl}' \\
@@ -1138,7 +1119,6 @@ def validateInstance(String instanceId, String label) {
         def response = apiCall('GET', deplUrl, null)
         // Log the raw response on the first poll to reveal the actual field structure
         if (i == 0) {
-            log('INFO', "${label}  raw deployment response (first 500 chars): ${response.take(500)}")
         }
         def respData = readJSON text: response
         // Resolve deployment object — handles bare object, array, items-wrapper, and deployments-wrapper
@@ -1186,8 +1166,7 @@ def validateInstance(String instanceId, String label) {
 def apiCall(String method, String url, String bodyFile) {
     def bodyArg = bodyFile ? "--data @\"${bodyFile}\"" : ''
     def raw = sh(
-        script: """
-            set -e
+        script: """#!/bin/sh -e
             TMP=\$(mktemp)
             HTTP=\$(curl -s -o "\$TMP" -w "%{http_code}" \\
                 -X '${method}' '${url}' \\
@@ -1262,8 +1241,7 @@ def fetchPinnedConfig(String appName, Map coords) {
             credentialsId: env.NEXUS_CREDS_ID,
             usernameVariable: 'NEXUS_USR',
             passwordVariable: 'NEXUS_PSW')]) {
-        sh """
-            set -e
+        sh """#!/bin/sh -e
             rm -rf '${pinDir}' '${zipName}'
             # --noproxy: Nexus is internal; the corporate proxy cannot reach it
             HTTP=\$(curl -ks --noproxy '*' -w '%{http_code}' -o '${zipName}' \\
