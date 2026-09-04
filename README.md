@@ -2,6 +2,8 @@
 
 This repository contains all **MuleSoft Anypoint Flex Gateway** API configurations, policies, per-environment runtime config, and deployment automation for project **EAI-3541669**.
 
+> **Doing something specific?** See the [Cookbook](COOKBOOK.md) — recipes for onboarding an API, promoting a version, rolling back, and a troubleshooting index for every error the pipeline can raise.
+
 ---
 
 ## Project Structure
